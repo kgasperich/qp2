@@ -1,7 +1,7 @@
 import numpy as np
 from functools import reduce
 
-e
+
 def memoize(f):
     memo = {}
     def helper(x):
