@@ -1,7 +1,7 @@
 import numpy as np
 from functools import reduce
 
-
+e
 def memoize(f):
     memo = {}
     def helper(x):
@@ -668,10 +668,11 @@ def pyscf2QP2(cell,mf, kpts, kmesh=None, cas_idx=None, int_threshold = 1E-8,
         # shell start,end; AO start,end (sph or cart) for each atom
         for ib in range(sh0,sh1): # sets of contracted exponents
             l = cell.bas_angular(ib)    # angular momentum
-            if ( cell.cart==True):
-                 representation=((l+1)*(l+2))//2
-            else:
-                 representation=2*l-1
+            representation=((l+1)*(l+2))//2 #always use cart??
+            #if ( cell.cart==True):
+            #     representation=((l+1)*(l+2))//2
+            #else:
+            #     representation=2*l-1
             nprim = cell.bas_nprim(ib)  # numer of primitives
             es = cell.bas_exp(ib)       # exponents
             cs = cell.bas_ctr_coeff(ib) # coeffs
