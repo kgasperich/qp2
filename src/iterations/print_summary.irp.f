@@ -99,7 +99,18 @@ subroutine print_summary(e_,pt2_,error_,variance_,norm_,n_det_,n_occ_pattern_,n_
   endif
 
   call print_energy_components()
+  !for debugging
+  !call print_psi_det_coef()
 
+end subroutine
+
+subroutine print_psi_det_coef
+  implicit none
+  integer :: i 
+  do i=1,n_det
+    print'(F25.15)',psi_coef(i,1)
+    call debug_det(psi_det(1,1,i),n_int)
+  enddo
 end subroutine
 
 subroutine print_debug_fci
