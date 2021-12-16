@@ -445,3 +445,67 @@ BEGIN_PROVIDER [integer, list_all_but_del_orb, (n_all_but_del_orb)]
 
 END_PROVIDER 
 
+
+!==============================================================================!
+!                                                                              !
+!                                  core holes                                  !
+!                                                                              !
+!==============================================================================!
+
+BEGIN_PROVIDER [integer, dim_list_ionized_core_orb]
+  implicit none
+  BEGIN_DOC
+  ! dimensions for the allocation of list_core.
+  ! it is at least 1
+  END_DOC
+   dim_list_ionized_core_orb = max(n_ionized_core_orb,1)
+END_PROVIDER
+
+
+ BEGIN_PROVIDER [ integer(bit_kind), ionized_core_bitmask , (N_int,2) ]
+&BEGIN_PROVIDER [ integer, n_int_ionized_core_max ]
+  implicit none
+  BEGIN_DOC
+  ! Bitmask identifying the ionized core MOs
+  END_DOC
+  integer :: i,ispin
+  ionized_core_bitmask  = 0_bit_kind
+  if(n_ionized_core_orb > 0)then
+    call list_to_bitstring( ionized_core_bitmask(1,1), list_ionized_core, n_ionized_core_orb, N_int)
+    call list_to_bitstring( ionized_core_bitmask(1,2), list_ionized_core, n_ionized_core_orb, N_int)
+  endif
+  n_int_ionized_core_max=0
+  do i=1,N_int
+    do ispin=1,2
+      if (popcnt(ionized_core_bitmask(i,ispin))>0) then
+        n_int_ionized_core_max=i
+      endif
+    enddo
+  enddo
+
+ END_PROVIDER
+
+
+ BEGIN_PROVIDER [ integer, list_ionized_core        , (dim_list_ionized_core_orb) ]
+&BEGIN_PROVIDER [ integer, list_ionized_core_reverse, (mo_num) ]
+  implicit none
+  BEGIN_DOC
+  ! List of MO indices which are in the core.
+  END_DOC
+  integer                        :: i, n
+  list_ionized_core = 0
+  list_ionized_core_reverse = 0
+
+  n=0
+  do i = 1, mo_num
+    !if(mo_class(i) == 'Core')then
+    if(i <= n_ionized_core_orb)then
+      n += 1
+      list_ionized_core(n) = i
+      list_ionized_core_reverse(i) = n
+    endif
+  enddo
+  print *,  'Ionized Core MOs:'
+  print *,  list_ionized_core(1:n_ionized_core_orb)
+
+END_PROVIDER
