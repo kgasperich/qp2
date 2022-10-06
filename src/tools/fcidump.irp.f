@@ -60,25 +60,41 @@ subroutine fcidump_complex
     do kj=1,kl
       do kk=1,kl
         ki=kconserv(kl,kk,kj)
-        if (ki>kl) cycle
+        if (ki>kl) then
+          print*,'fcidump ki>kl',ki,',',kl
+          cycle
+        endif
+        print*,'fcidump block ki,kk,kj,kl ',ki,',',kk,',',kj,',',kl
         do l1=1,n_act_orb_kpts(kl)
           il=list_act_kpts(l1,kl)
           l = (kl-1)*mo_num_per_kpt + il
           do j1=1,n_act_orb_kpts(kj)
             ij=list_act_kpts(j1,kj)
             j = (kj-1)*mo_num_per_kpt + ij
-            if (j>l) exit
+            !if (j>l) then
+            !  print*,'fcidump j>l',j,',',l
+            !  exit
+            !endif
             call idx2_tri_int(j,l,jl2)
             do k1=1,n_act_orb_kpts(kk)
               ik=list_act_kpts(k1,kk)
               k = (kk-1)*mo_num_per_kpt + ik
-              if (k>l) exit
+              !if (k>l) then
+              !  print*,'fcidump k>l',k,',',l
+              !  exit
+              !endif
               do i1=1,n_act_orb_kpts(ki)
                 ii=list_act_kpts(i1,ki)
                 i = (ki-1)*mo_num_per_kpt + ii
-                if ((j==l) .and. (i>k)) exit
+                !if ((j==l) .and. (i>k)) then
+                !  print*,'fcidump j==l and i>k',j,',',l,',',i,',',k
+                !  exit
+                !endif
                 call idx2_tri_int(i,k,ik2)
-                if (ik2 > jl2) exit
+                !if (ik2 > jl2) then
+                !  print*,'fcidump ik2>jl2',ik2,',',jl2
+                !  exit
+                !endif
                 integral = get_two_e_integral_complex(i,j,k,l,mo_integrals_map,mo_integrals_map_2)
                 if (cdabs(integral) > mo_integrals_threshold) then
                   write(i_unit_output,'(2(E25.15,X),4(I6,X))') dble(integral), dimag(integral),i,k,j,l

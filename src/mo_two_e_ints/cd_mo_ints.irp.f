@@ -71,10 +71,14 @@ subroutine mo_map_fill_from_chol_dot
   wall_0 = wall_1
   do kQ = 1, kpt_num
     Q_idx = kpt_sparse_map(kQ)
+    print*,'CD MO kQ = ',kQ,' Q_idx = ',Q_idx
     do kl = 1, kpt_num
       kj = qktok2(kQ,kl)
       assert(kQ == qktok2(kj,kl))
-      if (kj>kl) cycle
+      if (kj>kl) then
+        print*,'CD MO skip kj>kl ',kj,', ',kl
+        cycle
+      endif
       call idx2_tri_int(kj,kl,kjkl2)
       ints_jl = 0.d0
       if (Q_idx > 0) then
@@ -100,7 +104,10 @@ subroutine mo_map_fill_from_chol_dot
       do kk=1,kl
         ki = qktok2(minusk(kk),kQ)
         assert(ki == kconserv(kl,kk,kj))
-        if (ki>kl) cycle
+        if (ki>kl) then
+          print*,'CD MO skip ki>kl ',ki,', ',kl
+          cycle
+        endif
         call idx2_tri_int(ki,kk,kikk2)
         ints_ik = 0.d0
         if (Q_idx > 0) then
@@ -121,6 +128,7 @@ subroutine mo_map_fill_from_chol_dot
             enddo
           enddo
         endif
+        print*,'CD MO block ki,kk,kj,kl ',ki,',',kk,',',kj,',',kl
 
         !$OMP PARALLEL PRIVATE(i,k,j,l,ii,ik,ij,il,jl2,ik2, &
             !$OMP  mu, mik, mjl, &
@@ -149,16 +157,28 @@ subroutine mo_map_fill_from_chol_dot
           l=il+(kl-1)*mo_num_per_kpt
           do ij=1,mo_num_per_kpt
             j=ij+(kj-1)*mo_num_per_kpt
-            if (j>l) exit
+            if (j>l) then
+              print*,'CD MO skip j>l ',j,', ',l
+              exit
+            endif
             call idx2_tri_int(j,l,jl2)
             do ik=1,mo_num_per_kpt
               k=ik+(kk-1)*mo_num_per_kpt
-              if (k>l) exit
+              if (k>l) then
+                print*,'CD MO skip k>l ',k,', ',l
+                exit
+              endif
               do ii=1,mo_num_per_kpt
                 i=ii+(ki-1)*mo_num_per_kpt
-                if ((j==l) .and. (i>k)) exit
+                if ((j==l) .and. (i>k)) then
+                  print*,'CD MO skip j==l and i>k ',j,',',l,',',i,',',k
+                  exit
+                endif
                 call idx2_tri_int(i,k,ik2)
-                if (ik2 > jl2) exit
+                if (ik2 > jl2) then
+                  print*,'CD MO skip ik2>jl2 ',ik2,',',jl2
+                  exit
+                endif
                 !integral = zdotc(df_num,ints_jl(1,ij,il),1,ints_ik(1,ii,ik),1)
                 !integral = zdotu(chol_num(kQ),ints_jl(1,ij,il),1,ints_ik(1,ii,ik),1)
                 integral = zdotu(chol_num(kQ),ints_jl(1,il,ij),1,ints_ik(1,ii,ik),1)
