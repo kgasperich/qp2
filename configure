@@ -226,7 +226,7 @@ EOF
               cd f77-zmq-*
               ./configure --prefix=\$QP_ROOT
               export ZMQ_H="\$QP_ROOT"/include/zmq.h
-              make && make check && make install
+              make && make install
 EOF
 
 
