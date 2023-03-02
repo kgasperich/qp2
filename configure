@@ -12,6 +12,7 @@ unset CCXX
 # Force GCC instead of ICC for dependencies
 export CC=gcc
 
+
 # Download submodules
 git submodule init
 git submodule update
@@ -232,7 +233,7 @@ EOF
 
     elif [[ ${PACKAGE} = ocaml ]] ; then
 
-         execute <<EOF
+	 execute <<EOF
             source "${QP_ROOT}"/quantum_package.rc
             cd "${QP_ROOT}"/external/
             tar --gunzip --extract --file qp2-dependencies/ocaml-bundle_x86.tar.gz
