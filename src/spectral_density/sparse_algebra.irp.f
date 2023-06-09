@@ -133,113 +133,103 @@ subroutine sparse_csr_zmv(A_v, A_c, A_p, x, y, sze, nnz)
     !$OMP END PARALLEL
 end
 
-subroutine form_sparse_dH(csr_s, csr_c, csr_v, sze, dets, iorb, ispin, ac_type, N_det_l)
-    implicit none
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!! Utilties for building and reutilizing sparse matrices !!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+subroutine sparse_csr_MM(A_c, A_p, I_k, B_c, B_p, sze, nnz_in)
     BEGIN_DOC
-    ! Form a compressed sparse row matrix representation of the Hamiltonian
-    ! in the space of the determinants. For real Hamiltonians (molecules).
-
-    ! csr_s are the row pointers
-    ! csr_c are the column indices
-    ! csr_v are the matrix values
-    ! sze is the maximum possible number of nonzero entreis
-    ! dets are the determinants which form the space of the Hamiltonian
-    ! iorb is the oribital into which a hole/particle is being created
-    ! ispin is the spin of the hole/particle
-    ! ac_type is F for adding an electron, T if removing
-    ! N_det_l is the largest index of the determinants to include (when sorted by energy) 
+    ! Matrix matrix multiplication routine for sparse matrices
+    ! NOT general
+    ! Performs A I = B, returning B in CSR format
+    ! Performs the multiplication between a symmetric, CSR matrix of 1s/0s
+    ! against a low-rank identity matrix
+    ! Used for transferring the sparsity calculation of the full system to the
+    ! reduced pattern when a hole or particle is introduced!
+    ! 
+    ! A_c are the column indices of the full Hamiltonian
+    ! A_p are the row pointers of the full Hamiltonian
+    ! I_k is a length sze vector representing the low-rank identity matrix,
+    !       whose zeros are the determinants (nodes) removed from the full space
+    ! B_c are the output column indices of the reduced Hamiltonian
+    ! B_p are the output row pointers of the reduced Hamiltonian
+    ! sze is the full rank of A
+    ! nnz_in is the number of nonzeros in the full Hamiltonian
     END_DOC
+    implicit none
 
-    integer, intent(in)           :: iorb, ispin, N_det_l
-    integer(kind=8), intent(in)        :: sze
-    integer(bit_kind), intent(in) :: dets(N_int, 2, N_det_l)
-    logical, intent(in)           :: ac_type
-    integer, intent(out)          :: csr_s(N_det_l+1), csr_c(sze)
-    double precision, intent(out) :: csr_v(sze)
-
-    integer              :: n, i, j, k, l_row, old_row
-    integer              :: nnz, nnz_cnt, nnz_tot
-    integer              :: n_vals, n_vals_row, n_threads, ID
-    integer              :: nnz_csr, ii, scn_a, kk
+    integer, intent(in) :: sze, nnz_in, A_c(nnz_in), A_p(sze+1), I_k(sze)
+    integer, intent(out):: B_c(nnz_in), B_p(sze+1)
+    integer :: i, j, k, ii, kk, lcol, nnz_cnt, old_row, nnz_tot
+    integer              :: n_vals, n_threads, ID, scn_a, nnz
     integer :: OMP_get_num_threads, OMP_get_thread_num
-    integer, allocatable :: nnz_arr(:), coo_r(:), coo_c(:), l_cols(:)
+    integer, allocatable :: nnz_arr(:), coo_r(:), coo_c(:)
     integer, allocatable :: coo_r_all(:), coo_c_all(:), coo_r_t(:), coo_c_t(:)
-    integer, allocatable:: coo_s(:), coo_n(:)
-    double precision     :: hij, frac
-    double precision, allocatable :: coo_v(:), coo_v_t(:), coo_v_all(:)
-    
-    ! force provide early so that threads don't each try to provide
-    call i_H_j(dets(:,:,1), dets(:,:,1), N_int, hij) 
+    integer, allocatable:: coo_s(:), csr_n(:)
+    double precision     :: frac
 
-    !$OMP PARALLEL SHARED(nnz_tot, nnz_arr, nnz_csr, n_threads, dets, psi_det, N_det, N_det_l, N_int, nnz_max_per_row, n_vals_row,&
-    !$OMP                 coo_r_all, coo_c_all, coo_v_all, csr_s, csr_c, csr_v, coo_s, coo_n)& 
-    !$OMP PRIVATE(i,j,old_row, k,ii,kk, scn_a, ID, hij, nnz, nnz_cnt, coo_r, coo_c, coo_v, coo_r_t, coo_c_t, coo_v_t, l_cols, l_row) 
+
+    !$OMP PARALLEL SHARED(nnz_tot, nnz_arr, n_threads,&
+    !$OMP                 coo_r_all, coo_c_all, coo_s, I_k, A_c, A_p, B_c, B_p)& 
+    !$OMP PRIVATE(i,j,old_row, k,ii,kk, scn_a, ID, nnz, nnz_cnt, coo_r, coo_c, coo_r_t, coo_c_t, lcol) 
+
 
     !$ n_threads = OMP_get_num_threads()
     !$ ID = OMP_get_thread_num() + 1
 
     !$OMP SINGLE
-    allocate(coo_s(N_det_l), coo_n(N_det_l))
-    coo_n = 0
+    allocate(coo_s(sze))
+    B_p = 0
     !$OMP END SINGLE
     !$OMP BARRIER
 
-    ! initial allocation sizes for vectors
     frac = 0.2
-    n_vals = max(nint(N_det_l*N_det_l*frac/n_threads), 128)
-    n_vals_row = nnz_max_per_row
+    n_vals = max(nint(sze*sze*frac/n_threads), 128)
 
     allocate(coo_r(n_vals))
     allocate(coo_c(n_vals))
-    allocate(coo_v(n_vals))
-    allocate(l_cols(n_vals_row))
-    
+
     !$OMP SINGLE
     allocate(nnz_arr(n_threads))
     nnz_tot = 0
     !$OMP END SINGLE
-    
+
+
+    ! loop over rows
     nnz_cnt = 0
     !$OMP DO SCHEDULE(GUIDED)
-    do i = 1, N_det ! this loop needs to go over all the determinants, since this loop is not in determiant order but rather k_a order
-        nnz = 0
-        l_cols = 0
+    do i = 1, sze
 
-        ! check if row in N+1/N-1 determinant space
-        ! if so, grab all the indices of all nonzero columns for that row in the upper half of H
-        call get_sparse_columns(i, l_cols, l_row, nnz, n_vals_row,&
-                                 iorb, ispin, ac_type, N_det_l)
+        if (I_k(i) == 0) cycle ! node is emoved from graph
 
-        if (nnz == 0) cycle
+        nnz = A_p(i+1)-1 - A_p(i) ! maximum reallocation size
 
-        ! reallocate arrays if necessary
         if (nnz_cnt + nnz > size(coo_r, 1)) then
             allocate(coo_r_t(nnz_cnt + 10*nnz))
             allocate(coo_c_t(nnz_cnt + 10*nnz))
-            allocate(coo_v_t(nnz_cnt + 10*nnz))
             
             coo_r_t(:nnz_cnt) = coo_r
             coo_c_t(:nnz_cnt) = coo_c
-            coo_v_t(:nnz_cnt) = coo_v
             
             call move_alloc(coo_r_t, coo_r)
             call move_alloc(coo_c_t, coo_c)
-            call move_alloc(coo_v_t, coo_v)
         end if
-        
-        
-        ! Calculate nonzero entries and temperorarily store in COO format
-        coo_n(l_row) = nnz ! store number of entries in row for later
-        do j = 1, nnz
-            nnz_cnt += 1
 
-            call i_H_j(dets(:,:,l_row),&
-                       dets(:,:,l_cols(j)), N_int, hij)
-            
-            coo_r(nnz_cnt) = l_row
-            coo_c(nnz_cnt) = l_cols(j)
-            coo_v(nnz_cnt) = hij
+        ! loop over columns in row
+        do j = A_p(i), A_p(i+1)-1
+            lcol = A_c(j)
+            if (I_k(lcol) == 1) then ! current column still in space
+                B_p(i+1) += 1 ! increase pointer spacing
+                nnz_cnt += 1
+                coo_r(nnz_cnt) = i ! store rows/columns in COO buffers
+                coo_c(nnz_cnt) = lcol
+            end if
+
         end do
+
     end do
     !$OMP END DO
 
@@ -251,15 +241,14 @@ subroutine form_sparse_dH(csr_s, csr_c, csr_v, sze, dets, iorb, ispin, ac_type, 
     !$OMP BARRIER
     
     !$OMP SINGLE
-    print *, "Total non-zero entries in Hamiltonian: ", nnz_tot, " max size:", sze
+    print *, "Total non-zero entries in Hamiltonian: ", nnz_tot, " max size:", nnz_in
     !$OMP END SINGLE
-    
+
     !$OMP SINGLE
     allocate(coo_r_all(nnz_tot))
     allocate(coo_c_all(nnz_tot))
-    allocate(coo_v_all(nnz_tot))
     !$OMP END SINGLE
-    
+
     k = 0
     do i = 1, ID-1
         k += nnz_arr(i)
@@ -268,7 +257,6 @@ subroutine form_sparse_dH(csr_s, csr_c, csr_v, sze, dets, iorb, ispin, ac_type, 
     ! coo_*_all are in shared memory; since threads have disjoint work, this is safe
     coo_r_all(k+1:k+nnz_arr(ID)) = coo_r
     coo_c_all(k+1:k+nnz_arr(ID)) = coo_c
-    coo_v_all(k+1:k+nnz_arr(ID)) = coo_v
     !$OMP BARRIER
 
     ! calculate the starting index of each row in COO, since there is no sorting guarantee
@@ -292,11 +280,9 @@ subroutine form_sparse_dH(csr_s, csr_c, csr_v, sze, dets, iorb, ispin, ac_type, 
 
     ! calculate CSR pointer ranges
     ! row i data goes from csr_s(i) to csr_s(i+1) - 1
-    ! use inclusive scan to reduce counts of rows in coo_n to set pointer ranges
-
+    ! use inclusive scan to reduce counts of rows in B_p to set pointer ranges
     !$OMP SINGLE
-    csr_s(1) = 1
-    csr_s(2:N_det_l+1) = coo_n
+    B_p(1) = 1
     !$OMP END SINGLE
     
     ! need to strongly enforce synchronization here
@@ -304,54 +290,246 @@ subroutine form_sparse_dH(csr_s, csr_c, csr_v, sze, dets, iorb, ispin, ac_type, 
     !$OMP SINGLE
     scn_a = 0
     !$OMP SIMD REDUCTION(inscan, +:scn_a)
-    do i = 1, N_det_l+1
-        scn_a = scn_a + csr_s(i)
+    do i = 1, sze+1
+        scn_a = scn_a + B_p(i)
         !$OMP SCAN INCLUSIVE(scn_a)
-        csr_s(i) = scn_a
+        B_p(i) = scn_a
     end do
     !$OMP END SINGLE
     !$OMP BARRIER
 
     ! loop through rows and construct CSR matrix from COO temp arrays
     !$OMP DO SCHEDULE(GUIDED)
-    do i = 1, N_det_l
-        csr_v(csr_s(i):csr_s(i+1)-1) = coo_v_all(coo_s(i):coo_s(i+1)-1)
-        csr_c(csr_s(i):csr_s(i+1)-1) = coo_c_all(coo_s(i):coo_s(i+1)-1)
+    do i = 1, sze
+        B_c(B_p(i):B_p(i+1)-1) = coo_c_all(coo_s(i):coo_s(i+1)-1)
     end do
     !$OMP END DO
 
-    deallocate(coo_r, coo_c, coo_v, l_cols)
+    deallocate(coo_r, coo_c)
 
     !$OMP SINGLE
-    deallocate(coo_s, coo_n, nnz_arr, coo_r_all, coo_c_all, coo_v_all)
+    deallocate(coo_s, nnz_arr, coo_r_all, coo_c_all)
     !$OMP END SINGLE
     !$OMP END PARALLEL
-
+    
 end
 
-subroutine form_sparse_zH(csr_s, csr_c, csr_v, sze, dets, iorb, ispin, ac_type, N_det_l)
+subroutine sparse_csr_MM_row_part(A_c, A_p, I_k, B_c, B_p, sze, nnz_in)
+    BEGIN_DOC
+    ! Matrix matrix multiplication routine for sparse matrices
+    ! With row partitioning during worksharing
+    ! NOT general
+    ! Performs A I = B, returning B in CSR format
+    ! Performs the multiplication between a symmetric, CSR matrix of 1s/0s
+    ! against a low-rank identity matrix
+    ! Used for transferring the sparsity calculation of the full system to the
+    ! reduced pattern when a hole or particle is introduced!
+    ! 
+    ! A_c are the column indices of the full Hamiltonian
+    ! A_p are the row pointers of the full Hamiltonian
+    ! I_k is a length sze vector representing the low-rank identity matrix,
+    !       whose zeros are the determinants (nodes) removed from the full space
+    ! B_c are the output column indices of the reduced Hamiltonian
+    ! B_p are the output row pointers of the reduced Hamiltonian
+    ! sze is the full rank of A
+    ! nnz_in is the number of nonzeros in the full Hamiltonian
+    END_DOC
+    implicit none
+
+    integer, intent(in) :: sze, nnz_in, A_c(nnz_in), A_p(sze+1), I_k(sze)
+    integer, intent(out):: B_c(nnz_in), B_p(sze+1)
+    integer :: i, j, k, ii, kk, lcol, nnz_cnt, old_row, nnz_tot
+    integer              :: n_vals, n_threads, ID, scn_a, nnz
+    integer :: OMP_get_num_threads, OMP_get_thread_num
+    integer, allocatable :: nnz_arr(:), coo_r(:), coo_c(:)
+    integer, allocatable :: coo_r_all(:), coo_c_all(:), coo_r_t(:), coo_c_t(:)
+    integer, allocatable:: coo_s(:), csr_n(:)
+    double precision     :: frac
+
+    integer :: target_N, row_start, row_end
+    integer, allocatable :: pointer_blocks(:), row_starts(:)
+
+    !$OMP PARALLEL SHARED(nnz_tot, nnz_arr, n_threads, target_N, nnz_in, pointer_blocks, row_starts,&
+    !$OMP                 coo_r_all, coo_c_all, coo_s, I_k, A_c, A_p, B_c, B_p)& 
+    !$OMP PRIVATE(i,j,old_row, k,ii,kk, scn_a, ID, n_vals, nnz, nnz_cnt, coo_r, coo_c, coo_r_t, coo_c_t, lcol, row_start, row_end) 
+
+
+    !$ n_threads = OMP_get_num_threads()
+    !$ ID = OMP_get_thread_num() + 1
+
+    !$OMP SINGLE
+    allocate(coo_s(sze), pointer_blocks(sze+1), row_starts(n_threads+1))
+    pointer_blocks = 0
+    row_starts = 0
+    B_p = 0
+    target_N = nnz_in / n_threads
+    !$OMP END SINGLE
+    !$OMP BARRIER
+
+    ! split the work so that different groups of contiguous rows have roughly equal entries
+    !$OMP DO SCHEDULE(GUIDED)
+    do i = 1, sze+1
+        pointer_blocks(i) = A_p(i) / target_N + 1
+    end do
+    !$OMP END DO
+    !$OMP BARRIER
+
+    ii = (sze / n_threads)*(ID-1) + 1 ! start of range
+    kk = (sze / n_threads) * ID + 3 ! end of range, slight overlap to catch boundary pointers
+    if (ID == n_threads) kk = sze
+    old_row = pointer_blocks(ii)
+    
+    do i = ii, kk 
+        if(pointer_blocks(i) .ne. old_row) then 
+            row_starts(pointer_blocks(i)) = i
+            old_row = pointer_blocks(i)
+        end if 
+    end do
+    
+    !$OMP SINGLE
+    row_starts(1) = 1
+    row_starts(n_threads+1) = sze+1
+    !$OMP END SINGLE
+    !$OMP BARRIER
+    
+    row_start = row_starts(ID)
+    row_end = row_starts(ID+1) - 1
+    if (ID == n_threads) row_end = sze
+
+    ! allocate arrays and start main work loops
+    n_vals = A_p(row_end+1)-A_p(row_start)
+
+    allocate(coo_r(n_vals))
+    allocate(coo_c(n_vals))
+    coo_c = 0
+    coo_r = 0
+
+    !$OMP SINGLE
+    allocate(nnz_arr(n_threads))
+    nnz_tot = 0
+    !$OMP END SINGLE
+
+
+    ! loop over rows
+    nnz_cnt = 0
+    do i = row_start, row_end
+
+        if (I_k(i) == 0) cycle ! node is removed from graph
+
+        ! nnz = A_p(i+1)-1 - A_p(i) ! maximum reallocation size
+
+        ! loop over columns in row
+        do j = A_p(i), A_p(i+1)-1
+            lcol = A_c(j)
+            if (I_k(lcol) == 1) then ! current column still in space
+                B_p(i+1) += 1 ! increase pointer spacing
+                nnz_cnt += 1
+                coo_r(nnz_cnt) = i ! store rows/columns in COO buffers
+                coo_c(nnz_cnt) = lcol
+            end if
+
+        end do
+
+    end do
+
+    nnz_arr(ID) = nnz_cnt
+
+    !$OMP CRITICAl
+    nnz_tot = nnz_tot + nnz_cnt
+    !$OMP END CRITICAl
+    !$OMP BARRIER
+    
+    !$OMP SINGLE
+    print *, "Total non-zero entries in Hamiltonian: ", nnz_tot, " max size:", nnz_in
+    !$OMP END SINGLE
+    
+    !$OMP SINGLE
+    allocate(coo_r_all(nnz_tot))
+    allocate(coo_c_all(nnz_tot))
+    coo_c_all = 0
+    coo_r_all = 0
+    !$OMP END SINGLE
+    !$OMP BARRIER
+    
+    k = 0
+    do i = 1, ID-1
+        k += nnz_arr(i)
+    end do
+    
+    ! coo_*_all are in shared memory; since threads have disjoint work, this is safe
+    coo_r_all(k+1:k+nnz_arr(ID)) = coo_r(1:nnz_cnt)
+    coo_c_all(k+1:k+nnz_arr(ID)) = coo_c(1:nnz_cnt)
+    !$OMP BARRIER
+
+    ! calculate the starting index of each row in COO, since there is no sorting guarantee
+    ! iterate over range, keep track of current row; if row changes, record the row start
+    ii = (nnz_tot / n_threads)*(ID-1) + 1 ! start of range
+    kk = (nnz_tot / n_threads) * ID + 3 ! end of range, slight overlap to catch boundary pointers
+    if (ID == n_threads) kk = nnz_tot
+    old_row = coo_r_all(ii)
+    
+    do i = ii, kk 
+        if(coo_r_all(i) .ne. old_row) then 
+            coo_s(coo_r_all(i)) = i
+            old_row = coo_r_all(i)
+        end if 
+    end do
+
+    ! make sure first row in COO is accounted for
+    !$OMP SINGLE
+    coo_s(coo_r_all(1)) = 1
+    !$OMP END SINGLE
+    
+    ! calculate CSR pointer ranges
+    ! row i data goes from csr_s(i) to csr_s(i+1) - 1
+    ! use inclusive scan to reduce counts of rows in B_p to set pointer ranges
+    !$OMP SINGLE
+    B_p(1) = 1
+    !$OMP END SINGLE
+    
+    ! need to strongly enforce synchronization here
+    !$OMP BARRIER
+    !$OMP SINGLE
+    scn_a = 0
+    !$OMP SIMD REDUCTION(inscan, +:scn_a)
+    do i = 1, sze+1
+        scn_a = scn_a + B_p(i)
+        !$OMP SCAN INCLUSIVE(scn_a)
+        B_p(i) = scn_a
+    end do
+    !$OMP END SINGLE
+    !$OMP BARRIER
+    
+    ! loop through rows and construct CSR matrix from COO temp arrays
+    do i = row_start, row_end
+        B_c(B_p(i):B_p(i+1)-1) = coo_c_all(coo_s(i):coo_s(i+1)-1)
+    end do
+    
+    deallocate(coo_r, coo_c)
+    
+    !$OMP BARRIER
+    !$OMP SINGLE
+    deallocate(coo_s, nnz_arr, coo_r_all, coo_c_all, pointer_blocks, row_starts)
+    !$OMP END SINGLE
+    !$OMP END PARALLEL
+    
+end
+
+subroutine get_sparsity_structure(csr_s, csr_c, sze, N_det_l)
     implicit none
     BEGIN_DOC
     ! Form a compressed sparse row matrix representation of the Hamiltonian
-    ! in the space of the determinants. For real Hamiltonians (molecules).
+    ! connectivity in the space of the determinants. 
 
     ! csr_s are the row pointers
     ! csr_c are the column indices
-    ! csr_v are the matrix values
-    ! sze is the maximum possible number of nonzero entreis
-    ! dets are the determinants which form the space of the Hamiltonian
-    ! iorb is the oribital into which a hole/particle is being created
-    ! ispin is the spin of the hole/particle
-    ! ac_type is F for adding an electron, T if removing
+    ! sze is the maximum possible number of nonzero entries
     ! N_det_l is the largest index of the determinants to include (when sorted by energy) 
     END_DOC
 
-    integer, intent(in)           :: iorb, ispin, N_det_l
+    integer, intent(in)           :: N_det_l
     integer(kind=8), intent(in)        :: sze
-    integer(bit_kind), intent(in) :: dets(N_int, 2, N_det_l)
-    logical, intent(in)           :: ac_type
     integer, intent(out)          :: csr_s(N_det_l+1), csr_c(sze)
-    complex*16, intent(out) :: csr_v(sze)
 
     integer              :: n, i, j, k, l_row, old_row
     integer              :: nnz, nnz_cnt, nnz_tot
@@ -362,16 +540,11 @@ subroutine form_sparse_zH(csr_s, csr_c, csr_v, sze, dets, iorb, ispin, ac_type, 
     integer, allocatable :: coo_r_all(:), coo_c_all(:), coo_r_t(:), coo_c_t(:)
     integer, allocatable:: coo_s(:), coo_n(:)
     double precision     :: frac
-    complex*16           :: hij
-    complex*16, allocatable :: coo_v(:), coo_v_t(:), coo_v_all(:)
     
 
-    ! force provide early so that threads don't each try to provide
-    call i_h_j_complex(dets(:,:,1), dets(:,:,1), N_int, hij) 
-
-    !$OMP PARALLEL SHARED(nnz_tot, nnz_arr, nnz_csr, n_threads, dets, psi_det, N_det, N_det_l, N_int, nnz_max_per_row, n_vals_row,&
-    !$OMP                 coo_r_all, coo_c_all, coo_v_all, csr_s, csr_c, csr_v, coo_s, coo_n)& 
-    !$OMP PRIVATE(i,j,old_row, k,ii,kk, scn_a, ID, hij, nnz, nnz_cnt, coo_r, coo_c, coo_v, coo_r_t, coo_c_t, coo_v_t, l_cols, l_row) 
+    !$OMP PARALLEL SHARED(nnz_tot, nnz_arr, nnz_csr, n_threads, N_det, N_det_l, nnz_max_per_row, n_vals_row,&
+    !$OMP                 coo_r_all, coo_c_all, csr_s, csr_c, coo_s, coo_n)& 
+    !$OMP PRIVATE(i, j , old_row, k, ii, kk, scn_a, ID, nnz, nnz_cnt, coo_r, coo_c, coo_r_t, coo_c_t, l_cols, l_row) 
 
     !$ n_threads = OMP_get_num_threads()
     !$ ID = OMP_get_thread_num() + 1
@@ -389,7 +562,6 @@ subroutine form_sparse_zH(csr_s, csr_c, csr_v, sze, dets, iorb, ispin, ac_type, 
 
     allocate(coo_r(n_vals))
     allocate(coo_c(n_vals))
-    allocate(coo_v(n_vals))
     allocate(l_cols(n_vals_row))
     
     !$OMP SINGLE
@@ -399,14 +571,13 @@ subroutine form_sparse_zH(csr_s, csr_c, csr_v, sze, dets, iorb, ispin, ac_type, 
     
     nnz_cnt = 0
     !$OMP DO SCHEDULE(GUIDED)
-    do i = 1, N_det ! this loop needs to go over all the determinants, since this loop is not in determiant order but rather k_a order
+    do i = 1, N_det ! this loop needs to go over all the determinants, since this loop is not in determinant order but rather k_a order
         nnz = 0
         l_cols = 0
-        
+
         ! check if row in N+1/N-1 determinant space
         ! if so, grab all the indices of all nonzero columns for that row in the upper half of H
-        call get_sparse_columns(i, l_cols, l_row, nnz, n_vals_row,&
-                                 iorb, ispin, ac_type, N_det_l)
+        call get_all_sparse_columns(i, l_cols, l_row, nnz, n_vals_row, N_det_l)
 
         if (nnz == 0) cycle
 
@@ -414,15 +585,12 @@ subroutine form_sparse_zH(csr_s, csr_c, csr_v, sze, dets, iorb, ispin, ac_type, 
         if (nnz_cnt + nnz > size(coo_r, 1)) then
             allocate(coo_r_t(nnz_cnt + 10*nnz))
             allocate(coo_c_t(nnz_cnt + 10*nnz))
-            allocate(coo_v_t(nnz_cnt + 10*nnz))
             
             coo_r_t(:nnz_cnt) = coo_r
             coo_c_t(:nnz_cnt) = coo_c
-            coo_v_t(:nnz_cnt) = coo_v
             
             call move_alloc(coo_r_t, coo_r)
             call move_alloc(coo_c_t, coo_c)
-            call move_alloc(coo_v_t, coo_v)
         end if
         
         
@@ -430,13 +598,8 @@ subroutine form_sparse_zH(csr_s, csr_c, csr_v, sze, dets, iorb, ispin, ac_type, 
         coo_n(l_row) = nnz ! store number of entries in row for later
         do j = 1, nnz
             nnz_cnt += 1
-
-            call i_h_j_complex(dets(:,:,l_row),&
-                               dets(:,:,l_cols(j)), N_int, hij)
-            
             coo_r(nnz_cnt) = l_row
             coo_c(nnz_cnt) = l_cols(j)
-            coo_v(nnz_cnt) = hij
         end do
     end do
     !$OMP END DO
@@ -449,14 +612,14 @@ subroutine form_sparse_zH(csr_s, csr_c, csr_v, sze, dets, iorb, ispin, ac_type, 
     !$OMP BARRIER
     
     !$OMP SINGLE
-    print *, "Total non-zero entries in Hamiltonian: ", nnz_tot, " max size:", sze
+    print *, "Total non-zero entries in full Hamiltonian: ", nnz_tot, " max size:", sze
     !$OMP END SINGLE
     
     !$OMP SINGLE
     allocate(coo_r_all(nnz_tot))
     allocate(coo_c_all(nnz_tot))
-    allocate(coo_v_all(nnz_tot))
     !$OMP END SINGLE
+    !$OMP BARRIER
     
     k = 0
     do i = 1, ID-1
@@ -466,7 +629,6 @@ subroutine form_sparse_zH(csr_s, csr_c, csr_v, sze, dets, iorb, ispin, ac_type, 
     ! coo_*_all are in shared memory; since threads have disjoint work, this is safe
     coo_r_all(k+1:k+nnz_arr(ID)) = coo_r
     coo_c_all(k+1:k+nnz_arr(ID)) = coo_c
-    coo_v_all(k+1:k+nnz_arr(ID)) = coo_v
     !$OMP BARRIER
 
     ! calculate the starting index of each row in COO, since there is no sorting guarantee
@@ -513,21 +675,642 @@ subroutine form_sparse_zH(csr_s, csr_c, csr_v, sze, dets, iorb, ispin, ac_type, 
     ! loop through rows and construct CSR matrix from COO temp arrays
     !$OMP DO SCHEDULE(GUIDED)
     do i = 1, N_det_l
-        csr_v(csr_s(i):csr_s(i+1)-1) = coo_v_all(coo_s(i):coo_s(i+1)-1)
         csr_c(csr_s(i):csr_s(i+1)-1) = coo_c_all(coo_s(i):coo_s(i+1)-1)
     end do
     !$OMP END DO
 
-    deallocate(coo_r, coo_c, coo_v, l_cols)
+    deallocate(coo_r, coo_c, l_cols)
 
     !$OMP SINGLE
-    deallocate(coo_s, coo_n, nnz_arr, coo_r_all, coo_c_all, coo_v_all)
+    deallocate(coo_s, coo_n, nnz_arr, coo_r_all, coo_c_all)
     !$OMP END SINGLE
     !$OMP END PARALLEL
 
 end
 
-subroutine get_sparse_columns(k_a, columns, row, nnz, nnz_max, iorb, ispin, ac_type, N_det_l)
+subroutine get_sparsity_structure_with_triples(csr_s,csr_c,csr_e,sze,N_det_l)
+    implicit none
+    BEGIN_DOC
+    ! Form a compressed sparse row matrix representation of the Hamiltonian
+    ! connectivity in the space of the determinants. 
+
+    ! csr_s are the row pointers
+    ! csr_c are the column indices
+    ! csr_e are the excitatio degrees between the row and column determinant
+    ! sze is the maximum possible number of nonzero entries
+    ! N_det_l is the largest index of the determinants to include (when sorted by energy) 
+    END_DOC
+
+    integer, intent(in)           :: N_det_l
+    integer(kind=8), intent(in)        :: sze
+    integer, intent(out)          :: csr_s(N_det_l+1), csr_c(sze), csr_e(sze)
+
+    integer              :: n, i, j, k, l_row, old_row
+    integer              :: nnz, nnz_cnt, nnz_tot
+    integer              :: n_vals, n_vals_row, n_threads, ID
+    integer              :: nnz_csr, ii, scn_a, kk
+    integer :: OMP_get_num_threads, OMP_get_thread_num
+    integer, allocatable :: nnz_arr(:), coo_r(:), coo_c(:), coo_e(:), l_cols(:), l_exc(:)
+    integer, allocatable :: coo_r_all(:), coo_c_all(:), coo_e_all(:), coo_r_t(:), coo_c_t(:), coo_e_t(:)
+    integer, allocatable:: coo_s(:), coo_n(:)
+    double precision     :: frac
+    
+
+    !$OMP PARALLEL SHARED(nnz_tot, nnz_arr, nnz_csr, n_threads, N_det, N_det_l, nnz_max_per_row, n_vals_row,&
+    !$OMP                 coo_r_all, coo_c_all, coo_e_all, csr_s, csr_c, csr_e, coo_s, coo_n)& 
+    !$OMP PRIVATE(i,j,old_row, k,ii,kk, scn_a, ID, nnz, nnz_cnt, coo_r, coo_c, coo_e, coo_r_t, coo_c_t, coo_e_t, l_cols, l_exc, l_row) 
+
+    !$ n_threads = OMP_get_num_threads()
+    !$ ID = OMP_get_thread_num() + 1
+
+    !$OMP SINGLE
+    allocate(coo_s(N_det_l), coo_n(N_det_l))
+    allocate(nnz_arr(n_threads))
+    coo_n = 0
+    nnz_tot = 0
+    !$OMP END SINGLE
+    !$OMP BARRIER
+
+    ! initial allocation sizes for vectors
+    frac = 0.2
+    n_vals = max(nint(N_det_l*N_det_l*frac/n_threads), 128)
+    n_vals_row = nnz_max_per_row
+
+    allocate(coo_r(n_vals), coo_c(n_vals), coo_e(n_vals), l_cols(n_vals_row), l_exc(n_vals_row))
+    
+    nnz_cnt = 0
+    !$OMP DO SCHEDULE(GUIDED)
+    do i = 1, N_det ! this loop needs to go over all the determinants, since this loop is not in determinant order but rather k_a order
+        nnz = 0
+        l_cols = 0
+
+        ! check if row in N+1/N-1 determinant space
+        ! if so, grab all the indices of all nonzero columns for that row in the upper half of H
+        call get_all_sparse_columns_with_triples(i,l_cols,l_exc,l_row,nnz,n_vals_row,N_det_l)
+
+        if (nnz == 0) cycle
+
+        ! reallocate arrays if necessary
+        if (nnz_cnt + nnz > size(coo_r, 1)) then
+            allocate(coo_r_t(nnz_cnt + 10*nnz))
+            allocate(coo_c_t(nnz_cnt + 10*nnz))
+            allocate(coo_e_t(nnz_cnt + 10*nnz))
+            
+            coo_r_t(:nnz_cnt) = coo_r
+            coo_c_t(:nnz_cnt) = coo_c
+            coo_e_t(:nnz_cnt) = coo_e
+            
+            call move_alloc(coo_r_t, coo_r)
+            call move_alloc(coo_c_t, coo_c)
+            call move_alloc(coo_e_t, coo_e)
+        end if
+        
+        
+        ! Calculate nonzero entries and temperorarily store in COO format
+        coo_n(l_row) = nnz ! store number of entries in row for later
+        do j = 1, nnz
+            nnz_cnt += 1
+            coo_r(nnz_cnt) = l_row
+            coo_c(nnz_cnt) = l_cols(j)
+            coo_e(nnz_cnt) = l_exc(j)
+        end do
+    end do
+    !$OMP END DO
+
+    nnz_arr(ID) = nnz_cnt
+
+    !$OMP CRITICAl
+    nnz_tot = nnz_tot + nnz_cnt
+    !$OMP END CRITICAl
+    !$OMP BARRIER
+    
+    !$OMP SINGLE
+    print *, "Total non-zero entries in full Hamiltonian: ", nnz_tot, " max size:", sze
+    !$OMP END SINGLE
+    
+    !$OMP SINGLE
+    allocate(coo_r_all(nnz_tot))
+    allocate(coo_c_all(nnz_tot))
+    allocate(coo_e_all(nnz_tot))
+    !$OMP END SINGLE
+    !$OMP BARRIER
+    
+    k = 0
+    do i = 1, ID-1
+        k += nnz_arr(i)
+    end do
+
+    ! coo_*_all are in shared memory; since threads have disjoint work, this is safe
+    coo_r_all(k+1:k+nnz_arr(ID)) = coo_r
+    coo_c_all(k+1:k+nnz_arr(ID)) = coo_c
+    coo_c_all(k+1:k+nnz_arr(ID)) = coo_e
+    !$OMP BARRIER
+
+    ! calculate the starting index of each row in COO, since there is no sorting guarantee
+    ! iterate over range, keep track of current row; if row changes, record the row start
+    ii = (nnz_tot / n_threads)*(ID-1) + 1 ! start of range
+    kk = (nnz_tot / n_threads) * ID + 3 ! end of range, slight overlap to catch boundary pointers
+    if (ID == n_threads) kk = nnz_tot
+    old_row = coo_r_all(ii)
+
+    do i = ii, kk 
+        if(coo_r_all(i) .ne. old_row) then 
+            coo_s(coo_r_all(i)) = i
+            old_row = coo_r_all(i)
+        end if 
+    end do
+
+    ! make sure first row in COO is accounted for
+    !$OMP SINGLE
+    coo_s(coo_r_all(1)) = 1
+    !$OMP END SINGLE
+
+    ! calculate CSR pointer ranges
+    ! row i data goes from csr_s(i) to csr_s(i+1) - 1
+    ! use inclusive scan to reduce counts of rows in coo_n to set pointer ranges
+
+    !$OMP SINGLE
+    csr_s(1) = 1
+    csr_s(2:N_det_l+1) = coo_n
+    !$OMP END SINGLE
+    
+    ! need to strongly enforce synchronization here
+    !$OMP BARRIER
+    !$OMP SINGLE
+    scn_a = 0
+    !$OMP SIMD REDUCTION(inscan, +:scn_a)
+    do i = 1, N_det_l+1
+        scn_a = scn_a + csr_s(i)
+        !$OMP SCAN INCLUSIVE(scn_a)
+        csr_s(i) = scn_a
+    end do
+    !$OMP END SINGLE
+    !$OMP BARRIER
+
+    ! loop through rows and construct CSR matrix from COO temp arrays
+    !$OMP DO SCHEDULE(GUIDED)
+    do i = 1, N_det_l
+        csr_c(csr_s(i):csr_s(i+1)-1) = coo_c_all(coo_s(i):coo_s(i+1)-1)
+        csr_e(csr_s(i):csr_s(i+1)-1) = coo_e_all(coo_s(i):coo_s(i+1)-1)
+    end do
+    !$OMP END DO
+
+    deallocate(coo_r, coo_c, coo_e, l_cols, l_exc)
+
+    !$OMP SINGLE
+    deallocate(coo_s, coo_n, nnz_arr, coo_r_all, coo_c_all, coo_e_all)
+    !$OMP END SINGLE
+    !$OMP END PARALLEL
+
+end
+
+
+
+subroutine uH_structure_from_gH(H_p, H_c, H_e, uH_p, uH_c, N_det_g, N_det_u,nnz_g,nnz_max,N_exc,&
+                                hash_alpha, hash_beta, hash_vals, hash_prime, hash_table_size,&
+                                I_cut_k, I_det_k)
+    BEGIN_DOC
+    ! Calculate the N+1/N-1 Hamiltonian from the ground state Hamiltonian with triples in CSR format
+    ! N+1/N-1 hamiltonian constructed on the union of the excitation spaces generated by a set of 
+    ! creation/annhiliation operators
+    END_DOC
+
+    implicit none
+    
+    !! input data
+    integer, intent(in) :: N_det_g, N_det_u, nnz_g, nnz_max, N_exc
+    integer, intent(in) :: H_p(N_det_g+1), H_c(nnz_g), H_e(nnz_g)
+    
+    integer, intent(in) :: hash_table_size, hash_prime
+    integer, intent(in) :: hash_alpha(hash_table_size), hash_beta(hash_table_size), hash_vals(hash_table_size)
+    logical             :: hash_success
+    
+    integer, intent(in) :: I_cut_k(N_det_g, N_exc)
+    integer(bit_kind), intent(in)   :: I_det_k(N_int, 2, N_det_u, N_exc)
+    
+    !! output data
+    integer, intent(out) :: uH_p(N_det_u+1), uH_c(nnz_max)
+
+    !! hash functions
+    integer :: hash_value
+
+    !! OMP calls
+    integer :: OMP_get_num_threads, OMP_get_thread_num
+
+    !! routine variables
+    integer             :: i, ii, j, jj, k, kk
+    integer             :: i_exc, j_exc, row, pidx, col, target_row, target_col, cur_exc_degree
+    integer             :: target_N, n_threads, ID, scn_a
+    integer(bit_kind)   :: target_row_det(N_int, 2), target_col_det(N_int, 2)
+    logical             :: criterion_a, criterion_b, criterion_c, add_pair
+
+    integer              :: buffer_count, nts_buffer_count, max_new_entries, buffer_total, ubuffer_total, umax_block_size
+    integer              :: block_start, block_end, nts_block_start, nts_block_end, block_total, max_block_size
+
+    integer, allocatable :: coo_r(:), coo_c(:), coo_n(:), coo_r_nts(:), coo_c_nts(:), coo_n_nts(:)
+    integer, allocatable :: u_coo_r(:), u_coo_c(:), u_coo_n(:)
+    integer, allocatable :: coo_c_all(:), coo_n_all(:), nnz_arr(:,:), u_coo_n_all(:)
+    integer, allocatable :: t_coo_r(:), t_coo_c(:), sort_idx(:)
+    integer, allocatable :: row_starts(:), pointer_blocks(:)
+    integer              :: row_start, row_end, old_row
+
+    buffer_count = 0
+    nts_buffer_count = 0
+
+    ! coo_x stores entries blocked by row; coo_x_nts stores entries in unsorted order
+    !$OMP PARALLEL DEFAULT(PRIVATE) SHARED(N_det_g, N_det_u, nnz_g, nnz_max, N_exc, H_p, H_c, H_e,&
+    !$OMP                                  uH_p, uH_c, pointer_blocks, row_starts, target_N, n_threads,&
+    !$OMP                                  hash_table_size, hash_prime, hash_alpha, hash_beta, hash_vals,&
+    !$OMP                                  I_cut_k, I_det_k, coo_c_all, coo_n_all, nnz_arr, umax_block_size)
+
+    ! hopefully default private works because this is verbose
+    ! OpenMP C API doesn't seem to have private, so when adapting, you will have to do this
+    !! $OMP PRIVATE(ID, buffer_count, nts_buffer_count, max_new_entries,&
+    !! $OMP        coo_r, coo_c, coo_r_nts, coo_c_nts, t_coo_r, t_coo_c,&
+    !! $OMP        row_start, row_end, i_exc, j_exc, row, pidx, col,&
+    !! $OMP        target_row, target_col, cur_exc_degree, target_row_det, target_col_det,&
+    !! $OMP        criterion_a, criterion_b, criterion_c, add_pair,&
+    !! $OMP        i, ii, j , jj)
+                
+    !$ n_threads = OMP_get_num_threads()
+    !$ ID = OMP_get_thread_num() + 1
+
+    !! calculate row partitions
+    !$OMP SINGLE
+    allocate(pointer_blocks(N_det_g+1), row_starts(n_threads+1), coo_n_all(N_det_u+1))
+    coo_n_all = 0
+    pointer_blocks = 0
+    row_starts = 0
+    target_N = nnz_g / n_threads
+    !$OMP END SINGLE
+    !$OMP BARRIER
+
+    ! split the work so that different groups of contiguous rows have roughly equal entries
+    !$OMP DO SCHEDULE(GUIDED)
+    do i = 1, N_det_g+1
+        pointer_blocks(i) = H_p(i) / target_N + 1
+    end do
+    !$OMP END DO
+    !$OMP BARRIER
+
+    ii = (N_det_g / n_threads)*(ID-1) + 1 ! start of range
+    kk = (N_det_g / n_threads) * ID + 3 ! end of range, slight overlap to catch boundary pointers
+    if (ID == n_threads) kk = N_det_g
+    old_row = pointer_blocks(ii)
+    
+    do i = ii, kk 
+        if(pointer_blocks(i) .ne. old_row) then 
+            row_starts(pointer_blocks(i)) = i
+            old_row = pointer_blocks(i)
+        end if 
+    end do
+    
+    !$OMP SINGLE
+    row_starts(1) = 1
+    row_starts(n_threads+1) = N_det_g+1
+    !$OMP END SINGLE
+    !$OMP BARRIER
+
+    row_start = row_starts(ID)
+    row_end = row_starts(ID+1) - 1
+    if (ID == n_threads) row_end = N_det_g
+    
+                  
+    allocate(coo_r(8192), coo_c(8192), coo_n(N_det_u+1), coo_r_nts(8192), coo_c_nts(8192), coo_n_nts(N_det_u+1)) ! private
+
+    !! this loop accomplishes the equivalent task as the loop over determinants in get_sparsity_structure()
+    !! loop over excitation pairs
+    do i_exc = 1, N_exc
+        do j_exc = 1, N_exc
+
+            !! loop over matrix entries
+            !! since this loop is done multiple times, can be sped up with row partitioning
+            do row = row_start, row_end
+
+                ! row cannot accept current i excitation
+                if (I_cut_k(row, i_exc) == 0) then
+                    cycle
+                end if
+                
+                max_new_entries = H_p(row+1) - H_p(row)
+                !! reallocate buffers if necessary
+                if (max_new_entries > (size(coo_r,1) - buffer_count - 100)) then ! reallocate sorted buffer
+                    allocate(t_coo_r(buffer_count + 4 *max_new_entries), t_coo_c(buffer_count + 4*max_new_entries))
+
+                    t_coo_r(:buffer_count) = coo_r
+                    t_coo_c(:buffer_count) = coo_c
+
+                    call move_alloc(t_coo_r, coo_r)
+                    call move_alloc(t_coo_c, coo_c)
+                end if
+                
+                if (max_new_entries > (size(coo_r,1) - buffer_count - 100)) then ! reallocate unsorted buffer
+                    allocate(t_coo_r(buffer_count + 4 *max_new_entries), t_coo_c(buffer_count + 4*max_new_entries))
+    
+                    t_coo_r(:buffer_count) = coo_r_nts
+                    t_coo_c(:buffer_count) = coo_c_nts
+    
+                    call move_alloc(t_coo_r, coo_r_nts)
+                    call move_alloc(t_coo_c, coo_c_nts)
+                end if
+
+                target_row_det = I_det_k(:, :, row, i_exc)
+                target_row = hash_value(hash_alpha, hash_beta, hash_vals, hash_prime, hash_table_size,&
+                                        target_row_det(:,1), target_row_det(:,2))
+                
+                !! handle diagonal excitations out of loop
+                if (i_exc == j_exc) then
+                    buffer_count += 1
+                    coo_r(buffer_count) = target_row
+                    coo_c(buffer_count) = target_row
+                else if (( j_exc > i_exc ) .and. ( I_cut_k(row, j_exc) == 1 )) then
+                    
+                    target_col_det = I_det_k(:, :, row, j_exc)
+                    target_col = hash_value(hash_alpha, hash_beta, hash_vals, hash_prime, hash_table_size,&
+                                            target_col_det(:,1), target_col_det(:,2))
+                    
+                    if (target_col < target_row) then
+                        nts_buffer_count += 1
+                        coo_r_nts(nts_buffer_count) = target_col
+                        coo_c_nts(nts_buffer_count) = target_row
+                    else if (target_col > target_row) then
+                        buffer_count += 1
+                        coo_r(buffer_count) = target_row
+                        coo_c(buffer_count) = target_col
+                    end if
+
+                end if
+                
+                
+                !! handle off diagonal excitations
+                do pidx = H_p(row) + 1, H_p(row+1) - 1
+                    
+                    
+                    !! add in new entries from determinant pair
+                    col = H_c(pidx)
+
+                    
+                    if (I_cut_k(col, j_exc)) then
+                        target_col_det = I_det_k(:, :, col, j_exc)
+                        target_col = hash_value(hash_alpha, hash_beta, hash_vals,hash_prime, hash_table_size,&
+                                                target_col_det(:,1), target_col_det(:,2))
+                        
+                        cur_exc_degree = H_e(pidx)
+
+                        if (i_exc == j_exc) then
+                            ! add in edges from intrinsic space
+                            ! avoid any triple excitation pairs
+                            if ((cur_exc_degree < 7) .and. (cur_exc_degree /= 3 )) then
+                                if (target_col < target_row) then
+                                    nts_buffer_count += 1
+                                    coo_r_nts(nts_buffer_count) = target_col
+                                    coo_c_nts(nts_buffer_count) = target_row
+                                else if (target_col > target_row) then
+                                    buffer_count += 1
+                                    coo_r(buffer_count) = target_row
+                                    coo_c(buffer_count) = target_col
+                                end if
+                            end if
+
+                        else
+                            !! following schema for determining how many determinants to add relies on fact that
+                            !! applied excitations are within the same spin channel
+
+                            ! both excitations are accepted in both determinants, and alpha degree increases by 1
+                            criterion_a = (I_cut_k(row, i_exc) == I_cut_k(col, i_exc)) .and. (I_cut_k(row, j_exc) == I_cut_k(col, j_exc))
+
+                            ! determinants accept exclusive excitations, and alpha degree reduces by 1
+                            criterion_b = (I_cut_k(row, i_exc) /= I_cut_k(col, i_exc)) .and. (I_cut_k(row, j_exc) /= I_cut_k(col, j_exc))
+
+                            ! one determinant can accept both excitations, while other can accept only one; overall degree stays same
+                            criterion_c = ( (I_cut_k(row, i_exc) /= I_cut_k(col, i_exc)) /= (I_cut_k(row, j_exc) /= I_cut_k(col, j_exc)) )&
+                                    .and. ( (I_cut_k(row, i_exc) == I_cut_k(col, i_exc)) /= (I_cut_k(row, j_exc) == I_cut_k(col, j_exc)) )
+
+                            add_pair = .false.
+                            select case (cur_exc_degree)
+                                case (1) ! (1,0) -> (1,0), (2,0)
+                                    !add_pair = criterion_c .or. ~criterion_c ! if c then (1,0), else (2,0)
+                                    add_pair = .true. 
+                                case (2) ! (2,0) -> (1,0), (2,0)
+                                    add_pair = criterion_b .or. criterion_c 
+                                case (3) ! (3,0) -> (2,0)
+                                    add_pair = criterion_b
+                                case (4) ! (0,1) -> (0,1), (1,1) 
+                                    add_pair = criterion_a .or. criterion_c
+                                case (5) ! (0,2) -> (0,2)
+                                    add_pair = criterion_c
+                                case (6) ! (1,1) -> (0,1), (1,1)
+                                    add_pair = criterion_b .or. criterion_c
+                                case (7) ! (1,2) -> (0,2)
+                                    add_pair = criterion_b
+                                case (8) ! (2,1) -> (1,1)
+                                    add_pair = criterion_b
+                            end select
+
+                            if ( add_pair ) then
+                                if (target_col < target_row) then
+                                    nts_buffer_count += 1
+                                    coo_r_nts(nts_buffer_count) = target_col
+                                    coo_c_nts(nts_buffer_count) = target_row
+                                else if (target_col > target_row) then
+                                    buffer_count += 1
+                                    coo_r(buffer_count) = target_row
+                                    coo_c(buffer_count) = target_col
+                                end if
+                            end if
+
+                        end if 
+
+                    end if
+
+                end do
+
+            end do
+
+        end do
+    end do
+
+    !! sort buffers per task; reduce combined buffers to unique buffers, blocked by per row
+
+    ! standard buffer is blocked by row but blocks aren't sorted
+    ! NTS is blocked by col, rows aren't sorted
+    call double_sort(coo_r, coo_c, buffer_count, coo_n, N_det_u)
+    call double_sort(coo_r_nts, coo_c_nts, nts_buffer_count, coo_n_nts, N_det_u)
+    
+    ! combine buffers by row block
+    buffer_total = nts_buffer_count + buffer_count
+    allocate(u_coo_c(buffer_total), u_coo_n(N_det_u+1))
+    u_coo_n(1) = 1
+
+    ! scan block sizes to get a maximum block allocation
+    max_block_size = 1
+    do i = 1, N_det_u
+        block_total = (coo_n(i+1) - coo_n(i)) + (coo_n_nts(i+1) - coo_n_nts(i))
+        max_block_size = merge(block_total, max_block_size, block_total > max_block_size)
+    end do
+    
+    ! reduce to unique entires by block and add to ubuffers
+    allocate(t_coo_c(max_block_size), sort_idx(max_block_size))
+    do i = 1, N_det_u
+        block_start = coo_n(i)
+        block_end = coo_n(i+1)-1
+        nts_block_start = coo_n(i)
+        nts_block_end = coo_n(i-1)
+        
+        block_total = (coo_n(i+1) - coo_n(i)) + (coo_n_nts(i+1) - coo_n_nts(i))
+
+        ! combine blocks into buffer
+        t_coo_c(1 : coo_n(i+1) - coo_n(i)) = coo_c(block_start:block_end)
+        t_coo_c(coo_n(i+1) - coo_n(i) + 1 : block_total) = coo_c_nts(nts_block_start:nts_block_end)
+
+        ! sort, then get unique entries
+        do j = 1, block_total
+            sort_idx(j) = j
+        end do
+
+        call insertion_isort(t_coo_c, sort_idx, block_total)
+        call unique_from_sorted_buffer(t_coo_c, block_total, ubuffer_total)
+
+        ! add into compact unique buffers
+        u_coo_n(i+1) = u_coo_n(i) + ubuffer_total
+        u_coo_c(u_coo_n(i):u_coo_n(i+1)-1) = t_coo_c
+    end do
+    deallocate(t_coo_c, sort_idx)
+    
+    
+    !! combine buffers into shared memory from unique components by task
+
+    ! sum reduce row block size by thread
+    do i = 1, N_det_u
+        nnz_arr(i, ID) = u_coo_n(i+1) - u_coo_n(i)
+    end do
+    !$OMP SINGLE
+    coo_n_all(1) = 1
+    !$OMP END SINGLE
+    !$OMP BARRIER
+
+    ! reduce counts over threads and set pointer ranges
+    !$OMP DO SCHEDULE(GUIDED)
+    do i = 1, N_det_u
+        ! get total number in block across threads
+        scn_a = 0
+        !$OMP SIMD REDUCTION(inscan, +:scn_a)
+        do j = 1, n_threads
+            scn_a = scn_a + nnz_arr(i, j)
+            !$OMP SCAN INCLUSIVE(scn_a)
+            nnz_arr(i, j) = scn_a
+        end do
+        coo_n_all(i+1) = scn_a
+    end do
+    !$OMP END DO
+    !$OMP BARRIER
+
+    !$OMP SINGLE
+    scn_a = 0
+    !$OMP SIMD REDUCTION(inscan, +:scn_a)
+    do i = 1, N_det_u+1
+        scn_a = scn_a + coo_n_all(i)
+        !$OMP SCAN INCLUSIVE(scn_a)
+        coo_n_all(i) = scn_a
+    end do
+    !$OMP END SINGLE
+    !$OMP BARRIER
+
+    !$OMP DO SCHEDULE(GUIDED)
+    do i = 2, N_det_u+1
+        do j = 1, n_threads
+            nnz_arr(i,j) += coo_n_all(i) - 1
+        end do
+    end do
+    !$OMP END DO
+
+    ! while work is finishing, allocate some arrays and get a buffer size for temp array allocation later
+    !$OMP SINGLE
+    allocate(u_coo_n_all(N_det_u), coo_c_all(coo_n_all(N_det_u+1)))
+    u_coo_n_all(1) = 1
+    !$OMP END SINGLE
+
+    !$OMP SINGLE
+    umax_block_size = 1
+    do i = 1, N_det_u 
+        kk = coo_n_all(i+1) - coo_n_all(i)
+        umax_block_size = merge(kk, umax_block_size, kk > umax_block_size)
+    end do
+    !$OMP END SINGLE
+
+    !$OMP BARRIER
+    
+    ! at this point, nnz_arr contains pointers for where each block owned by each thread begins
+    ! assemble into shared memory, then reduce to unique entries
+    ! in future implementation, this could be done with RMA or other global address space schemes
+    do i = 1, N_det_u - 1
+        block_start = nnz_arr(i, ID)
+        block_end = nnz_arr(i, modulo(ID+1, n_threads))
+        coo_c_all(block_start:block_end) = u_coo_c(u_coo_n(i):u_coo_n(i+1)-1)
+    end do
+
+    !$OMP SINGLE
+    ! since we're storing only the upper triangle, we can skip this is in the above loop
+    coo_c_all(coo_n_all(N_det_u):coo_n_all(N_det_u+1)-1) = N_det_u
+    !$OMP END SINGLE
+    
+    !$OMP BARRIER
+
+    ! get unique entries per shared row block
+    allocate(sort_idx(umax_block_size))
+    !$OMP DO SCHEDULE(GUIDED)
+    do i = 1, N_det_u
+        do j = 1, umax_block_size
+            sort_idx(j) = j
+        end do
+
+        block_start = coo_n_all(i)
+        block_end = coo_n_all(i+1) - 1
+        call insertion_isort(coo_c_all(block_start:block_end), sort_idx, block_end-block_start+1)
+        call unique_from_sorted_buffer(coo_c_all(block_start:block_end), block_end-block_start+1, ubuffer_total)
+
+        u_coo_n_all(i) = ubuffer_total
+    end do
+    !$OMP END DO
+    deallocate(sort_idx)
+
+    !$OMP BARRIER
+    !! assemble into CSR format
+
+    ! set up row pointers
+    !$OMP SINGLE
+    uH_p(1) = 1
+    uH_p(2:N_det_u+1) = u_coo_n_all
+    scn_a = 0
+    !$OMP SIMD REDUCTION(inscan, +:scn_a)
+    do i = 1, N_det_u+1
+        scn_a = scn_a + uH_p(i)
+        !$OMP SCAN INCLUSIVE(scn_a)
+        uH_p(i) = scn_a
+    end do
+    !$OMP END SINGLE
+    !$OMP BARRIER
+
+    ! fill in matrix
+    !$OMP DO SCHEDULE(GUIDED)
+    do i = 1, N_det_u
+        block_start = coo_n_all(i)
+        block_end = block_start + u_coo_n_all(i) - 1
+        uH_c(uH_p(i):uH_p(i+1)-1) = coo_c_all(block_start:block_end)
+    end do
+    !$OMP END DO
+
+    !! remaining clean up
+    !$OMP SINGLE
+    deallocate(pointer_blocks, row_starts, coo_n_all, coo_c_all, u_coo_n_all)
+    !$OMP END SINGLE
+
+    deallocate(coo_r, coo_c, coo_n, coo_r_nts, coo_c_nts, coo_n_nts, u_coo_c, u_coo_n)
+
+    !$OMP END PARALLEL
+end
+
+subroutine get_all_sparse_columns(k_a, columns, row, nnz, nnz_max, N_det_l)
     BEGIN_DOC
     ! Find all nonzero column indices belonging to row k_a in the bilinear matrix ordering
     !
@@ -536,16 +1319,12 @@ subroutine get_sparse_columns(k_a, columns, row, nnz, nnz_max, iorb, ispin, ac_t
     ! row is the index in the energy ordering corresponding to k_a
     ! nnz is the number of entries in columns
     ! nnz_max is the maximum number of entries allowed in column
-    ! iorb is the orbital into which a hole/particle is created
-    ! ispin is the spin of the hole/particle
-    ! ac_type == F if adding electron, T if removing
     ! N_det_l is the largest index of the determinants to include (when sorted by energy) 
     END_DOC
 
     implicit none
 
-    integer, intent(in)      :: k_a, nnz_max, iorb, ispin, N_det_l
-    logical, intent(in)      :: ac_type
+    integer, intent(in)      :: k_a, nnz_max, N_det_l
     integer, intent(out)     :: nnz, columns(nnz_max), row
     integer :: i, j, k, k_b
     integer :: krow, kcol, lrow, lcol
@@ -553,7 +1332,6 @@ subroutine get_sparse_columns(k_a, columns, row, nnz, nnz_max, iorb, ispin, ac_t
     integer :: n_singles_a, n_singles_b, n_doubles_aa, n_doubles_bb, n_doubles_ab
     integer :: n_buffer_old, n_doubles_ab_tot
     integer :: n_off_diagonal, n_offset, tdegree
-    logical :: is_filled
 
     integer(bit_kind) :: ref_det(N_int, 2), tmp_det(N_int, 2), tmp_det2(N_int, 2), sdet_a(N_int), sdet_b(N_int)
     integer(bit_kind), allocatable    :: buffer(:,:)
@@ -582,10 +1360,6 @@ subroutine get_sparse_columns(k_a, columns, row, nnz, nnz_max, iorb, ispin, ac_t
     ref_det(:,1) = psi_det_alpha_unique(:, krow)
     ref_det(:,2) = psi_det_beta_unique (:, kcol)
 
-    ! check if determinant can accept excitation; if not, leave
-    call orb_is_filled(ref_det, iorb, ispin, N_int, is_filled)
-    if (is_filled .neqv. ac_type) return 
-    
     ! Finding (1,0) and (2,0) excitations
     ! loop over same beta different alpha
     n_buffer = 0
@@ -601,11 +1375,6 @@ subroutine get_sparse_columns(k_a, columns, row, nnz, nnz_max, iorb, ispin, ac_t
         tmp_det(:,1) = psi_det_alpha_unique(:, lrow)
         tmp_det(:,2) = psi_det_beta_unique (:, lcol)
 
-        ! check if determinant can accept hole/particle
-        call orb_is_filled(tmp_det, iorb, ispin, N_int, is_filled)
-
-        if (is_filled .neqv. ac_type) cycle 
-        
         ! add determinant to buffer
         ! buffer is list of alpha spin determinants
         n_buffer += 1
@@ -643,11 +1412,6 @@ subroutine get_sparse_columns(k_a, columns, row, nnz, nnz_max, iorb, ispin, ac_t
         tmp_det(:,1) = psi_det_alpha_unique(:, lrow)
         tmp_det(:,2) = psi_det_beta_unique (:, lcol)
 
-        ! check if determinant can accept hole/particle
-        call orb_is_filled(tmp_det, iorb, ispin, N_int, is_filled)
-
-        if (is_filled .neqv. ac_type) cycle 
-                
         ! add determinant to buffer
         ! buffer is list of beta spin determinants
         n_buffer += 1
@@ -704,11 +1468,6 @@ subroutine get_sparse_columns(k_a, columns, row, nnz, nnz_max, iorb, ispin, ac_t
 
             tmp_det(:,1) = psi_det_alpha_unique(:, lrow)
             tmp_det(:,2) = psi_det_beta_unique (:, lcol)
-
-            ! check if determinant can accept hole/particle
-            call orb_is_filled(tmp_det, iorb, ispin, N_int, is_filled)
-
-            if (is_filled .neqv. ac_type) cycle 
 
             ! add determinant to buffer
             ! buffer is list of alpha spin determinants
@@ -768,29 +1527,448 @@ subroutine get_sparse_columns(k_a, columns, row, nnz, nnz_max, iorb, ispin, ac_t
                 srt_idx, all_idx)
 end
 
-subroutine orb_is_filled(key_ref,iorb,ispin,Nint,is_filled)
-    use bitmasks
-    implicit none
+subroutine get_all_sparse_columns_with_triples( k_a, columns,exc_degree,row,nnz,nnz_max,N_det_l )
     BEGIN_DOC
-    ! determine whether iorb, ispin is filled in key_ref
-    ! key_ref has alpha and beta parts
+    ! Find all nonzero column indices belonging to row k_a in the bilinear matrix ordering
+    !
+    ! k_a is current row index, in bilinear matrix order
+    ! columns are the columns belong to to k_a
+    ! row is the index in the energy ordering corresponding to k_a
+    ! nnz is the number of entries in columns
+    ! nnz_max is the maximum number of entries allowed in column
+    ! N_det_l is the largest index of the determinants to include (when sorted by energy) 
     END_DOC
-    integer, intent(in)            :: iorb, ispin, Nint
-    integer(bit_kind), intent(in) :: key_ref(Nint,2)
-    logical, intent(out) :: is_filled
+
+    implicit none
+
+    integer, intent(in)      :: k_a, nnz_max, N_det_l
+    integer, intent(out)     :: nnz, columns(nnz_max), row, exc_degree(nnz_max)
+    integer :: i, j, k, k_b
+    integer :: krow, kcol, lrow, lcol
+    integer :: lidx, kidx, tidx, n_buffer
+    integer :: n_singles_a, n_singles_b, n_doubles_aa, n_doubles_bb, n_doubles_ab
+    integer :: n_buffer_old, n_doubles_ab_tot, n_triples_tot
+    integer :: n_off_diagonal, n_offset, tdegree_alpha, tdegree_beta
+
+    integer(bit_kind) :: ref_det(N_int, 2), tmp_det(N_int, 2), tmp_det2(N_int, 2), sdet_a(N_int), sdet_b(N_int)
+    integer(bit_kind), allocatable    :: buffer(:,:)
+    integer, allocatable              :: singles_a(:), singles_b(:)
+    integer, allocatable              :: doubles_aa(:), doubles_bb(:), doubles_ab(:), triples(:), triples_case(:)
+    integer, allocatable              :: idx(:), all_idx(:), srt_idx(:), all_degree(:)
     
-    integer                        :: k,l
+
+    ! initialize arrays
+    allocate(buffer(N_int, N_det_l), idx(N_det_l))
+
+    n_singles_a = 0
+    n_singles_b = 0
+    n_doubles_aa = 0
+    n_doubles_ab = 0
+    n_doubles_bb = 0
     
-    ASSERT (iorb > 0)
-    ASSERT (ispin > 0)
-    ASSERT (ispin < 3)
-    ASSERT (Nint > 0)
+    ! store index and make sure it isn't out of range of the reduced determinant space
+    kidx = psi_bilinear_matrix_order(k_a)
+
+    if (kidx > N_det_l) return ! determinant not included in this subset
+
+    ! get pointer indices and a ref determinant
+    krow = psi_bilinear_matrix_rows(k_a)
+    kcol = psi_bilinear_matrix_columns(k_a)
+    ref_det(:,1) = psi_det_alpha_unique(:, krow)
+    ref_det(:,2) = psi_det_beta_unique (:, kcol)
+
+    ! Finding (1,0) and (2,0) excitations
+    ! loop over same beta different alpha
+    n_buffer = 0
+    do i = psi_bilinear_matrix_columns_loc(kcol), psi_bilinear_matrix_columns_loc(kcol+1)-1
+        lidx = psi_bilinear_matrix_order(i)
+        
+        ! check if determinant is in upper half of reduced Hamiltonian matrix
+        if ((lidx <= kidx) .or. (lidx > N_det_l)) cycle
+
+        lcol = psi_bilinear_matrix_columns(i)
+        lrow = psi_bilinear_matrix_rows(i)
+        
+        tmp_det(:,1) = psi_det_alpha_unique(:, lrow)
+        tmp_det(:,2) = psi_det_beta_unique (:, lcol)
+
+        ! add determinant to buffer
+        ! buffer is list of alpha spin determinants
+        n_buffer += 1
+        buffer(:,n_buffer) = tmp_det(:,1)
+        idx(n_buffer) = lidx
+    end do
+
+    allocate(singles_a(n_buffer), doubles_aa(n_buffer))
+
+    ! grab indices of all determinants in buffer related to ref_det by (1,0) or (2,0) excitations 
+    sdet_a = ref_det(:,1)
+    call get_all_spin_singles_and_doubles(buffer, idx, sdet_a, &
+                        N_int, n_buffer, singles_a, doubles_aa, n_singles_a, n_doubles_aa)
+
+    deallocate(buffer, idx)
+    allocate(buffer(N_int, N_det_l), idx(N_det_l))
+
+    ! Finding (0,1) and (0,2) excitations 
+    k_b = psi_bilinear_matrix_order_transp_reverse(k_a)
+    krow = psi_bilinear_matrix_transp_rows(k_b) !this is unnecessary, technically
+    kcol = psi_bilinear_matrix_transp_columns(k_b)
     
-    ! k is index of the int where iorb is found
-    ! l is index of the bit where iorb is found
-    k = ishft(iorb-1,-bit_kind_shift)+1
-    ASSERT (k >0)
-    l = iorb - ishft(k-1,bit_kind_shift)-1
-    ASSERT (l >= 0)
-    is_filled = btest(key_ref(k,ispin),l)  
-  end
+    ! loop over same alpha different beta
+    n_buffer = 0
+    do i = psi_bilinear_matrix_transp_rows_loc(krow), psi_bilinear_matrix_transp_rows_loc(krow+1)-1
+        tidx = psi_bilinear_matrix_transp_order(i)
+        lidx = psi_bilinear_matrix_order(tidx)
+
+        ! check if determinant is in upper half of reduced Hamiltonian matrix
+        if ((lidx <= kidx) .or. (lidx > N_det_l)) cycle
+        
+        lcol = psi_bilinear_matrix_transp_columns(i)
+        lrow = psi_bilinear_matrix_transp_rows(i)
+        
+        tmp_det(:,1) = psi_det_alpha_unique(:, lrow)
+        tmp_det(:,2) = psi_det_beta_unique (:, lcol)
+
+        ! add determinant to buffer
+        ! buffer is list of beta spin determinants
+        n_buffer += 1
+        buffer(:,n_buffer) = tmp_det(:,2)
+        idx(n_buffer) = lidx
+    end do
+    
+    allocate(singles_b(n_buffer), doubles_bb(n_buffer))
+
+    ! grab indices of all determinants in buffer related to ref_det by (0,1) or (0,2) excitations 
+    sdet_b = ref_det(:,2)
+    call get_all_spin_singles_and_doubles(buffer, idx, sdet_b, &
+                        N_int, n_buffer, singles_b, doubles_bb, n_singles_b, n_doubles_bb)
+                        
+    deallocate(buffer, idx)
+
+    ! Finding (1,1) excitations
+    allocate(buffer(N_int, N_det), idx(N_det))
+    allocate(doubles_ab(N_det))
+
+    n_buffer = 0
+    n_buffer_old = 0
+    n_doubles_ab_tot = 0
+
+    ! starting from list of beta singles does not give all the (1,1) excitations
+    ! so we need to search over either all beta or all alpha at some point
+    ! start from (0,1) to excite to (1,1)
+    do j = 1, n_det_beta_unique
+
+        kcol = psi_bilinear_matrix_columns(k)
+
+        tmp_det2(:,2) = psi_det_beta_unique (:, j)
+
+        ! check if a single excitation different
+        tdegree_beta = 0
+        do i = 1, N_int
+            tdegree_beta += popcnt(ieor(tmp_det2(i,2), ref_det(i,2)))
+        end do
+
+        if (tdegree_beta /= 2) then
+            cycle
+        end if
+
+        ! loop over same beta different alpha
+        do i = psi_bilinear_matrix_columns_loc(j), psi_bilinear_matrix_columns_loc(j+1)-1
+            lidx = psi_bilinear_matrix_order(i)
+
+            ! check if determinant is in upper half of reduced Hamiltonian matrix
+            if ((lidx <= kidx) .or. (lidx > N_det_l)) cycle
+
+            lcol = psi_bilinear_matrix_columns(i)
+            lrow = psi_bilinear_matrix_rows(i)
+
+            tmp_det(:,1) = psi_det_alpha_unique(:, lrow)
+            tmp_det(:,2) = psi_det_beta_unique (:, lcol)
+
+            ! add determinant to buffer
+            ! buffer is list of alpha spin determinants
+            n_buffer += 1
+            buffer(:,n_buffer) = tmp_det(:,1)
+            idx(n_buffer) = lidx
+        end do
+
+        sdet_a = ref_det(:,1)
+
+        ! all determinants are (X,1) excitations from ref_det
+        ! so we just need to check alpha channel now
+        ! grab indices of all determinants in buffer related to ref_det by (1,1) excitations 
+        call get_all_spin_singles(buffer(:,n_buffer_old+1:n_buffer), idx(n_buffer_old+1:n_buffer),&
+                                sdet_a, N_int, n_buffer-n_buffer_old,&
+                                doubles_ab(n_doubles_ab_tot+1:n_doubles_ab_tot+n_buffer-n_buffer_old),&
+                                n_doubles_ab)
+
+
+        n_buffer_old = n_buffer
+        n_doubles_ab_tot += n_doubles_ab
+    end do
+
+
+    !!! Finding triple excitations of form (3,0), (2,1), and (1,2)
+    ! start from (0,0), (0,1), (0,2) to excite to (3,0), (2,1), (1,2)
+    n_triples_tot = 0
+    allocate(triples(N_det_l), triples_case(N_det_l))
+
+    do j = 1, n_det_beta_unique
+
+        kcol = psi_bilinear_matrix_columns(k)
+
+        tmp_det2(:,2) = psi_det_beta_unique (:, j)
+
+        ! check if a single excitation different
+        tdegree_beta = 0
+        do i = 1, N_int
+            tdegree_beta += popcnt(ieor(tmp_det2(i,2), ref_det(i,2)))
+        end do
+
+        ! exclude anything with beta excitation > 2
+        if (tdegree_beta > 4) then
+            cycle
+        end if
+
+        ! loop over same beta different alpha
+        do i = psi_bilinear_matrix_columns_loc(j), psi_bilinear_matrix_columns_loc(j+1)-1
+            lidx = psi_bilinear_matrix_order(i)
+
+            ! check if determinant is in upper half of reduced Hamiltonian matrix
+            if ((lidx <= kidx) .or. (lidx > N_det_l)) cycle
+
+            lcol = psi_bilinear_matrix_columns(i)
+            lrow = psi_bilinear_matrix_rows(i)
+
+            tmp_det(:,1) = psi_det_alpha_unique(:, lrow)
+            tmp_det(:,2) = psi_det_beta_unique (:, lcol)
+
+            ! tmp_det(:,2) and tmp_det2(:,2) should be the same?
+            tdegree_alpha = 0
+            do k = 1, N_int
+                tdegree_alpha += popcnt(ieor(tmp_det(i,1), ref_det(i,1)))
+            end do
+
+            ! add to triples buffer 
+            if (tdegree_alpha + tdegree_beta == 6) then
+                n_triples_tot += 1
+                triples(n_triples_tot) = lidx
+                select case (tdegree_beta)
+                    case (0)
+                        triples_case(n_triples_tot) = 3
+                    case (2)
+                        triples_case(n_triples_tot) = 8
+                    case (4)
+                        triples_case(n_triples_tot) = 7
+                    case default
+                        write(*, ("(A40, I16, I16, I16)")),"Error in triple selection on krow/beta det/alpha det: ", k_a, j, i
+                        exit
+                end select
+            end if
+
+        end do
+    end do
+
+
+    !!! Create final buffers
+    ! add all indices into list and sort
+    ! number of off-diagonal terms needed to caclulate to fill this row in sparse Hamlitonian
+    n_off_diagonal = n_singles_a + n_singles_b + n_doubles_aa + n_doubles_ab_tot + n_doubles_bb + n_triples_tot
+
+    allocate(all_degree(n_off_diagonal+1), all_idx(n_off_diagonal+1), srt_idx(n_off_diagonal+1))
+
+    do i = 1, n_off_diagonal+1
+        srt_idx(i) = i
+    end do
+  
+    ! a - 1; aa - 2; aaa -3; b - 4; bb - 5; ab - 6; abb - 7; aab - 8
+    n_offset = 0
+    all_idx(n_offset+1:n_offset+1)               = kidx
+    all_degree(n_offset+1:n_offset+1)            = 0
+                            n_offset            += 1
+
+    all_idx(n_offset+1:n_offset+n_singles_a)     = singles_a(:n_singles_a)
+    all_degree(n_offset+1:n_offset+n_singles_a)  = 1
+                            n_offset            += n_singles_a
+
+    all_idx(n_offset+1:n_offset+n_singles_b)     = singles_b(:n_singles_b)
+    all_degree(n_offset+1:n_offset+n_singles_b)  = 3
+                            n_offset            += n_singles_b
+
+    all_idx(n_offset+1:n_offset+n_doubles_aa)    = doubles_aa(:n_doubles_aa)
+    all_degree(n_offset+1:n_offset+n_doubles_aa) = 2
+                            n_offset            += n_doubles_aa
+
+    all_idx(n_offset+1:n_offset+n_doubles_ab_tot)    = doubles_ab(:n_doubles_ab_tot)
+    all_degree(n_offset+1:n_offset+n_doubles_ab_tot) = 6
+                            n_offset                += n_doubles_ab_tot
+
+    all_idx(n_offset+1:n_offset+n_doubles_bb)     = doubles_bb(:n_doubles_bb)
+    all_degree(n_offset+1:n_offset+n_doubles_bb)  = 5
+                            n_offset             += n_doubles_bb
+
+    all_idx(n_offset+1:n_offset+n_triples_tot)    = triples(:n_triples_tot)
+    all_degree(n_offset+1:n_offset+n_triples_tot) = triples_case(:n_triples_tot)
+
+    call insertion_isort(all_idx, srt_idx, n_off_diagonal+1)
+
+    columns(:n_off_diagonal+1) = all_idx
+
+    do i = 1, n_off_diagonal+1
+        exc_degree(i) = all_degree(srt_idx(i))
+    end do
+
+    nnz = n_off_diagonal + 1
+    row = kidx
+    
+    deallocate(buffer, idx, singles_a, doubles_aa,&
+                singles_b, doubles_bb, doubles_ab,&
+                triples, triples_case,&
+                srt_idx, all_idx)
+end
+
+subroutine calc_sparse_dH(H_p, H_c, H_v, sze, nnz, dets)
+    BEGIN_DOC
+    ! Calculate the entries to the sparse Hamiltonian, given the structure
+    ! in CSR format
+    ! H_p are the row pointers
+    ! H_c are the column indices
+    ! H_v are the values of the Hamiltonian
+    ! sze is the square side length of the Hamiltonian
+    ! nnz is the total number of non zeros
+    ! dets is the set of (excited) determinants used to calculate the matrix entries
+    END_DOC
+
+    integer :: i, j
+    integer, intent(in) :: sze, nnz, H_p(sze+1), H_c(nnz)
+    integer(bit_kind), intent(in) :: dets(N_int, 2, sze)
+    double precision, intent(out) :: H_v(nnz)
+    double precision :: hij
+
+    H_v = 0.d0
+
+    ! force provide early so that threads don't each try to provide
+    call i_H_j(dets(:,:,1), dets(:,:,1), N_int, hij) 
+
+    !$OMP PARALLEL PRIVATE(i, j, hij) SHARED(H_c, H_p, H_v, sze, dets)
+    !$OMP DO SCHEDULE(GUIDED)
+    do i = 1, sze                
+        ! loop over columns
+        do j = H_p(i), H_p(i+1)-1
+            call i_H_j(dets(:,:,i),&
+                       dets(:,:,H_c(j)), N_int, hij)
+            H_v(j) = hij
+        end do
+    end do
+    !$OMP END DO
+    !$OMP END PARALLEL
+end
+
+subroutine calc_sparse_zH(H_p, H_c, H_v, sze, nnz, dets)
+    BEGIN_DOC
+    ! Calculate the entries to the sparse Hamiltonian, given the structure
+    ! in CSR format
+    ! H_p are the row pointers
+    ! H_c are the column indices
+    ! H_v are the values of the Hamiltonian
+    ! sze is the square side length of the Hamiltonian
+    ! nnz is the total number of non zeros
+    ! dets is the set of (excited) determinants used to calculate the matrix entries
+    END_DOC
+
+    integer :: i, j
+    integer, intent(in) :: sze, nnz, H_p(sze+1), H_c(nnz)
+    integer(bit_kind), intent(in) :: dets(N_int, 2, sze)
+    complex*16, intent(out) :: H_v(nnz)
+    complex*16 :: hij
+
+    H_v = 0.d0
+
+    ! force provide early so that threads don't each try to provide
+    call i_h_j_complex(dets(:,:,1), dets(:,:,1), N_int, hij) 
+
+    !$OMP PARALLEL PRIVATE(i, j, hij) SHARED(H_c, H_p, H_v, sze, dets)
+    !$OMP DO SCHEDULE(GUIDED)
+    do i = 1, sze                
+        ! loop over columns
+        do j = H_p(i), H_p(i+1)-1
+            call i_h_j_complex(dets(:,:,i),&
+                       dets(:,:,H_c(j)), N_int, hij)
+            H_v(j) = hij
+        end do
+    end do
+    !$OMP END DO
+    !$OMP END PARALLEL
+end
+
+subroutine unique_from_sorted_buffer(arr, n_max, n_out)
+    BEGIN_DOC
+    ! Pack unique values into front of array, in-place
+    ! Assumes array is sorted
+    END_DOC
+    implicit none
+
+    integer, intent(in)   :: n_max
+    integer, intent(inout) :: arr(n_max)
+    integer, intent(out)  :: n_out
+    integer :: i
+
+
+    n_out = 1
+    do i = 2, n_max
+        if (arr(i) == arr(i-1)) then
+            cycle
+        end if
+        n_out += 1
+        arr(n_out) = arr(i)
+    end do
+
+end
+
+subroutine double_sort(rows, cols, n_max, row_starts, N_det_u)
+    implicit none
+
+    integer, intent(in)    :: n_max, N_det_u
+    integer, intent(inout) :: rows(n_max), cols(n_max), row_starts(N_det_u+1)
+
+    integer :: i, j, cur_row, prev_row, n_rows, n_cols
+    integer, allocatable :: tcols(:), sort_idx(:)
+
+
+    allocate(sort_idx(n_max), tcols(n_max))
+    do i = 1, n_max
+        sort_idx(i) = i
+    end do
+
+    call insertion_isort(rows, sort_idx, n_max) ! rows are sorted
+  
+    ! sort cols by row 
+    prev_row = rows(1)
+    n_rows = 1
+    row_starts(n_rows) = 1
+    tcols = cols
+    do i = 1, n_max 
+        cur_row = rows(i)
+        if (cur_row /= prev_row) then
+            n_rows += 1
+            row_starts(n_rows) = i
+        end if
+        cols(i) = tcols(sort_idx(i))
+
+        prev_row = cur_row
+    end do
+    row_starts(n_rows+1) = n_max + 1
+
+    ! sort cols within row block
+    do i = 1, n_rows
+        n_cols = row_starts(i+1) - row_starts(i)
+        do j = 1, n_cols
+            sort_idx(j) = j
+        end do
+
+        call insertion_isort(cols(row_starts(i):row_starts(i+1)-1), sort_idx(:n_cols), n_cols)
+    end do
+
+
+    deallocate(sort_idx, tcols)
+end
