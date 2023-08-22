@@ -58,6 +58,13 @@ def cart2sph_coeff(mol, normalized='sp', ct={}):
 ##################################################################
 
 def bas_from_mbas(mbas):
+    """
+    input: mbas, dict
+    dict containing pyscf basis info
+
+    output: bas, dict
+    dict containing QP2 basis info (for basis module)
+    """
     from collections import Counter
     outbas = {}
 
@@ -87,6 +94,13 @@ def bas_from_mbas(mbas):
     return outbas
 
 def aobas_from_mbas(mbas):
+    """
+    input: mbas, dict
+    dict containing pyscf basis info
+
+    output: aobas, dict
+    dict containing QP2 ao_basis info (for ao_basis module)
+    """
     from collections import Counter
     outbas = {}
 
@@ -123,6 +137,12 @@ def aobas_from_mbas(mbas):
     return outbas
 
 def mbas_from_mol(mol):
+    """
+    input: mol, pyscf Mol object
+
+    output: mbas, dict
+    dict containing pyscf basis info
+    """
     mbas = {}
     mbas['nbas'] =     mol.nbas
     mbas['nprim'] =    [mol.bas_nprim(i)     for i in range(mbas['nbas'])]
@@ -134,9 +154,18 @@ def mbas_from_mol(mol):
     return mbas
 
 def save_mol_to_ezfio(mol,ezpath):
+    """
+    input:
+        mol, pyscf Mol object
+        Mol object containing basis info to be written to ezfio
+
+        ezpath, str
+        path to ezfio directory where basis data will be written
+    """
     mbas = mbas_from_mol(mol)
     aobas = aobas_from_mbas(mbas)
     bas = bas_from_mbas(mbas)
+
 
 
     basname = mol.basis if isinstance(mol.basis,str) else 'custom'
@@ -146,36 +175,76 @@ def save_mol_to_ezfio(mol,ezpath):
     natom = mol.natm
     
     ezfio.set_nuclei_nucl_num(natom)
-    ezfio.set_nuclei_nucl_coord(mol.atom_coords('B').tolist())
+    ezfio.set_nuclei_nucl_coord(mol.atom_coords('B').T.tolist())
     ezfio.set_nuclei_nucl_charge(mol.atom_charges().tolist())
     ezfio.set_nuclei_nucl_label([mol.atom_symbol(i) for i in range(natom)])
 
 
+    ezfio.set_ao_basis_ao_num(aobas['num'])
+    ezfio.set_ao_basis_ao_prim_num(aobas['primnum'])
     ezfio.set_ao_basis_ao_coef(aobas['coef'])
     ezfio.set_ao_basis_ao_expo(aobas['expo'])
     ezfio.set_ao_basis_ao_nucl(aobas['nucl'])
     ezfio.set_ao_basis_ao_power(aobas['power'])
-    ezfio.set_ao_basis_ao_prim_num(aobas['primnum'])
-    ezfio.set_ao_basis_ao_num(aobas['num'])
     
     ezfio.set_ao_basis_ao_basis(basname)
     ezfio.set_ao_basis_ao_cartesian(False)
     ezfio.set_ao_basis_ao_normalized(True)
     ezfio.set_ao_basis_primitives_normalized(True)
 
+    ezfio.set_basis_prim_num(bas['primnum'])
+    ezfio.set_basis_nucleus_shell_num(bas['nucl_sh_num'])
+    ezfio.set_basis_shell_num(bas['sh_num'])
     ezfio.set_basis_prim_coef(bas['coef'])
     ezfio.set_basis_prim_expo(bas['expo'])
-    ezfio.set_basis_prim_num(bas['primnum'])
     ezfio.set_basis_basis_nucleus_index(bas['nucl_idx'])
-    ezfio.set_basis_nucleus_shell_num(bas['nucl_sh_num'])
     ezfio.set_basis_shell_ang_mom(bas['sh_l'])
     ezfio.set_basis_shell_index(bas['sh_i'])
     ezfio.set_basis_shell_prim_num(bas['sh_prim'])
-    ezfio.set_basis_shell_num(bas['sh_num'])
 
     ezfio.set_basis_typ('Gaussian')
     ezfio.set_basis_basis(basname)
 
+    na,nb = mol.nelec
+    ezfio.set_electrons_elec_alpha_num(na)
+    ezfio.set_electrons_elec_beta_num(nb)
 
+
+def get_c2s_norm():
+    nxx = np.sqrt(4*np.pi/5)*2/3
+    nxy = nxx * np.sqrt(3)/2
+    nd = np.diag([nxx,nxy,nxy,nxx,nxy,nxx])
+    return {2:nd}
+
+
+def save_mos_to_ezfio(mf,ezpath):
+    """
+    input:
+        mol, pyscf Mol object
+        Mol object containing basis info to be written to ezfio
+
+        ezpath, str
+        path to ezfio directory where basis data will be written
+    """
+    mbas = mbas_from_mol(mf.mol)
+    aobas = aobas_from_mbas(mbas)
+    bas = bas_from_mbas(mbas)
+
+    ezfio.set_file(ezpath)
+
+    _, nmo = mf.mo_coeff.shape
+
+    if mf.mol.cart:
+        coef_pyscf_cart = mf.mo_coeff
+    else:
+        c2s = cart2sph_coeff(mf.mol,ct=get_c2s_norm())
+        s2c = np.linalg.inv(c2s.T @ c2s) @ c2s.T
+
+        coef_pyscf_sph = mf.mo_coeff
+        coef_pyscf_cart = s2c.T @ coef_pyscf_sph
+
+    ezfio.set_mo_basis_mo_num(nmo)
+    ezfio.set_mo_basis_mo_coef(coef_pyscf_cart.T.tolist())
+    return
 
 
