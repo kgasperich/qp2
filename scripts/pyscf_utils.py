@@ -211,8 +211,10 @@ def save_mol_to_ezfio(mol,ezpath):
 
 
 def get_c2s_norm():
-    nxx = np.sqrt(4*np.pi/5)*2/3
-    nxy = nxx * np.sqrt(3)/2
+    #nxx = np.sqrt(4*np.pi/5)*2/3
+    #nxy = nxx * np.sqrt(3)/2
+    nxx = np.sqrt(4*np.pi/5)
+    nxy = nxx / np.sqrt(3)
     nd = np.diag([nxx,nxy,nxy,nxx,nxy,nxx])
     return {2:nd}
 
@@ -238,10 +240,11 @@ def save_mos_to_ezfio(mf,ezpath):
         coef_pyscf_cart = mf.mo_coeff
     else:
         c2s = cart2sph_coeff(mf.mol,ct=get_c2s_norm())
-        s2c = np.linalg.inv(c2s.T @ c2s) @ c2s.T
+        #s2c = np.linalg.inv(c2s.T @ c2s) @ c2s.T
 
         coef_pyscf_sph = mf.mo_coeff
-        coef_pyscf_cart = s2c.T @ coef_pyscf_sph
+        #coef_pyscf_cart = s2c.T @ coef_pyscf_sph
+        coef_pyscf_cart = c2s @ coef_pyscf_sph
 
     ezfio.set_mo_basis_mo_num(nmo)
     ezfio.set_mo_basis_mo_coef(coef_pyscf_cart.T.tolist())
