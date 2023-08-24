@@ -317,12 +317,16 @@ def save_mos_to_ezfio(mf,ezpath):
     _, nmo = mf.mo_coeff.shape
 
     if mf.mol.cart:
-        raise
         coef_pyscf_cart = mf.mo_coeff
         xyz = [i[3] for i in mf.mol.ao_labels(fmt=False)]
-        cartnorm = np.diag([cartnorm_str(i) for i in xyz])
-        #coef_qp2_cart = cartnorm @ coef_pyscf_cart
-        coef_qp2_cart = coef_pyscf_cart
+
+        def fnorm(s):
+            if len(s) <=1:
+                return 1
+            else:
+                return np.sqrt(4*np.pi/doublefactorial(2*len(s)+1) * cartnorm_str(s))
+        cartnorm = np.diag([fnorm(i) for i in xyz])
+        coef_qp2_cart = cartnorm @ coef_pyscf_cart
     else:
         c2s = cart2sph_coeff(mf.mol,ct=get_c2s_norm())
         #s2c = np.linalg.inv(c2s.T @ c2s) @ c2s.T
