@@ -5,6 +5,77 @@ import numpy as np
 import scipy
 from ezfio import ezfio
 import itertools
+import functools
+
+@functools.lru_cache()
+def doublefactorial(n):
+    if n>=2:
+        return n * doublefactorial(n-2)
+    else:
+        return 1
+
+@functools.lru_cache()
+def cartnorm(nxyz):
+    return np.product([doublefactorial(2*i-1) for i in nxyz])
+
+def cartnorm_str(s):
+    return cartnorm(tuple(s.count(i) for i in 'xyz'))
+
+@functools.lru_cache()
+def gms_cart_order(l):
+    def sort1(s):
+        # return single xyz string in gamess order
+        return ''.join(sorted((i*s.count(i) for i in 'xyz'), key=lambda x:(-len(x),x)))
+
+    # unsorted, unordered xyz strings
+    sxyz0 = map(''.join, itertools.combinations_with_replacement('xyz', r=l))
+
+    # unsorted, ordered xyz strings
+    sxyz1 = map(sort1, sxyz0)
+
+    # sorted, ordered xyz strings
+    return sorted(sxyz1, key=lambda s: (sorted((-s.count(i) for i in 'xyz')), s))
+
+def pyscf_cart_order(l):
+    return sorted(map(''.join, itertools.combinations_with_replacement('xyz', r=l)))
+
+def pyscf_to_gms_order(l):
+    xg = gms_cart_order(l)
+    xp = pyscf_cart_order(l)
+    m = np.zeros((len(xp),len(xg)))
+    #p2g = [(xp.index(''.join(sorted(xi))),i) for i,xi in enumerate(xg)]
+    for i,xi in enumerate(xg):
+        m[i,xp.index(''.join(sorted(xi)))] = 1
+    return m.T
+
+def debug_pyscf_to_gms_order(l):
+    xg = gms_cart_order(l)
+    xp = pyscf_cart_order(l)
+    print(xg)
+    print(xp)
+    m = np.zeros((len(xp),len(xg)))
+    #p2g = [(xp.index(''.join(sorted(xi))),i) for i,xi in enumerate(xg)]
+    for i,xi in enumerate(xg):
+        m[i,xp.index(''.join(sorted(xi)))] = 1
+    print(m)
+    return m
+
+
+def lm_cart_rescale(l):
+    '''
+    rescaling of certain functions within shells
+    these arise due to different normalization factors for the different Cartesian functions
+    a Cartesian GTO:
+       x^(n_x) y^(n_y) z^(n_z) exp(-a r^2)
+    is relatively normalized (i.e. relative to other function with the same shell)
+    by a factor of:
+       product((2*n_k-1)!! for n_k in (n_x, n_y, n_z))
+    '''
+    if l<=1:
+        return np.eye(shsze(l,False))
+    else:
+        n0 = cartnorm_str('x'*l)
+        return np.diag(np.sqrt([cartnorm_str(si)/n0 for si in gms_cart_order(l)])) * (2.0)**(-0.5*l)
 
 
 # map xyz string to format of ezfio.ao_basis_ao_power
@@ -210,14 +281,23 @@ def save_mol_to_ezfio(mol,ezpath):
     ezfio.set_electrons_elec_beta_num(nb)
 
 
-def get_c2s_norm():
-    #nxx = np.sqrt(4*np.pi/5)*2/3
-    #nxy = nxx * np.sqrt(3)/2
-    nxx = np.sqrt(4*np.pi/5)
-    nxy = nxx / np.sqrt(3)
-    nd = np.diag([nxx,nxy,nxy,nxx,nxy,nxx])
-    return {2:nd}
+def get_c2s_norm_l(l):
+    """
+    cartesian function normalization factors in pyscf order
+    """
+    if l<=1:
+        #return np.eye(2*l+1,dtype=float)
+        return None
+    cart_str = pyscf_cart_order(l)
+    mfac = list(map(cartnorm_str, pyscf_cart_order(l)))
+    return np.diag(np.sqrt(4*np.pi/doublefactorial(2*l+1) * np.array(mfac)))
 
+def get_c2s_norm(lmax=9):
+    """
+    dict of cartesian norm factors for multiple l
+    pass to `cart2sph_coeff` as arg ct
+    """
+    return {l:get_c2s_norm_l(l) for l in range(2,lmax)}
 
 def save_mos_to_ezfio(mf,ezpath):
     """
@@ -237,17 +317,29 @@ def save_mos_to_ezfio(mf,ezpath):
     _, nmo = mf.mo_coeff.shape
 
     if mf.mol.cart:
+        raise
         coef_pyscf_cart = mf.mo_coeff
+        xyz = [i[3] for i in mf.mol.ao_labels(fmt=False)]
+        cartnorm = np.diag([cartnorm_str(i) for i in xyz])
+        #coef_qp2_cart = cartnorm @ coef_pyscf_cart
+        coef_qp2_cart = coef_pyscf_cart
     else:
         c2s = cart2sph_coeff(mf.mol,ct=get_c2s_norm())
         #s2c = np.linalg.inv(c2s.T @ c2s) @ c2s.T
 
         coef_pyscf_sph = mf.mo_coeff
         #coef_pyscf_cart = s2c.T @ coef_pyscf_sph
-        coef_pyscf_cart = c2s @ coef_pyscf_sph
+        coef_qp2_cart = c2s @ coef_pyscf_sph
 
     ezfio.set_mo_basis_mo_num(nmo)
-    ezfio.set_mo_basis_mo_coef(coef_pyscf_cart.T.tolist())
+    ezfio.set_mo_basis_mo_coef(coef_qp2_cart.T.tolist())
     return
 
+def save_pyscf_to_ezfio(mf, ezpath):
+    """
+    save basis and mo coefs to ezfio
+    """
+    save_mol_to_ezfio(mf.mol, ezpath)
+    save_mos_to_ezfio(mf, ezpath)
+    return
 
