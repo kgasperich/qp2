@@ -35,6 +35,7 @@ subroutine print_energy_components()
       print *, 'Vee  : Electron-Electron potential energy'
       print *, 'Vecp : Potential energy of the pseudo-potentials'
       print *, 'T    : Electronic kinetic energy'
+      print *, 'Etot : Total energy'
       print *, ''
     endif
 
@@ -46,6 +47,7 @@ subroutine print_energy_components()
     print *, 'Vee  = ', Vee
     print *, 'Vecp = ', Vecp
     print *, 'T    = ', T
+    print *, 'Etot = ', Vnn + Ven + Vee + Vecp + T
     print *, ''
   enddo
 
