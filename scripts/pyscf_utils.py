@@ -3,9 +3,13 @@
 
 import numpy as np
 import scipy
-from ezfio import ezfio
+from ezfio import ezfio_obj
 import itertools
 import functools
+
+
+def get_n64_from_norb(norb):
+    return ((norb-1)//64)+1
 
 @functools.lru_cache()
 def doublefactorial(n):
@@ -241,44 +245,46 @@ def save_mol_to_ezfio(mol,ezpath):
 
     basname = mol.basis if isinstance(mol.basis,str) else 'custom'
 
-    ezfio.set_file(ezpath)
+    ezf = ezfio_obj()
+
+    ezf.set_file(ezpath)
     
     natom = mol.natm
     
-    ezfio.set_nuclei_nucl_num(natom)
-    ezfio.set_nuclei_nucl_coord(mol.atom_coords('B').T.tolist())
-    ezfio.set_nuclei_nucl_charge(mol.atom_charges().tolist())
-    ezfio.set_nuclei_nucl_label([mol.atom_symbol(i) for i in range(natom)])
+    ezf.set_nuclei_nucl_num(natom)
+    ezf.set_nuclei_nucl_coord(mol.atom_coords('B').T.tolist())
+    ezf.set_nuclei_nucl_charge(mol.atom_charges().tolist())
+    ezf.set_nuclei_nucl_label([mol.atom_symbol(i) for i in range(natom)])
 
 
-    ezfio.set_ao_basis_ao_num(aobas['num'])
-    ezfio.set_ao_basis_ao_prim_num(aobas['primnum'])
-    ezfio.set_ao_basis_ao_coef(aobas['coef'])
-    ezfio.set_ao_basis_ao_expo(aobas['expo'])
-    ezfio.set_ao_basis_ao_nucl(aobas['nucl'])
-    ezfio.set_ao_basis_ao_power(aobas['power'])
+    ezf.set_ao_basis_ao_num(aobas['num'])
+    ezf.set_ao_basis_ao_prim_num(aobas['primnum'])
+    ezf.set_ao_basis_ao_coef(aobas['coef'])
+    ezf.set_ao_basis_ao_expo(aobas['expo'])
+    ezf.set_ao_basis_ao_nucl(aobas['nucl'])
+    ezf.set_ao_basis_ao_power(aobas['power'])
     
-    ezfio.set_ao_basis_ao_basis(basname)
-    ezfio.set_ao_basis_ao_cartesian(False)
-    ezfio.set_ao_basis_ao_normalized(True)
-    ezfio.set_ao_basis_primitives_normalized(True)
+    ezf.set_ao_basis_ao_basis(basname)
+    ezf.set_ao_basis_ao_cartesian(False)
+    ezf.set_ao_basis_ao_normalized(True)
+    ezf.set_ao_basis_primitives_normalized(True)
 
-    ezfio.set_basis_prim_num(bas['primnum'])
-    ezfio.set_basis_nucleus_shell_num(bas['nucl_sh_num'])
-    ezfio.set_basis_shell_num(bas['sh_num'])
-    ezfio.set_basis_prim_coef(bas['coef'])
-    ezfio.set_basis_prim_expo(bas['expo'])
-    ezfio.set_basis_basis_nucleus_index(bas['nucl_idx'])
-    ezfio.set_basis_shell_ang_mom(bas['sh_l'])
-    ezfio.set_basis_shell_index(bas['sh_i'])
-    ezfio.set_basis_shell_prim_num(bas['sh_prim'])
+    ezf.set_basis_prim_num(bas['primnum'])
+    ezf.set_basis_nucleus_shell_num(bas['nucl_sh_num'])
+    ezf.set_basis_shell_num(bas['sh_num'])
+    ezf.set_basis_prim_coef(bas['coef'])
+    ezf.set_basis_prim_expo(bas['expo'])
+    ezf.set_basis_basis_nucleus_index(bas['nucl_idx'])
+    ezf.set_basis_shell_ang_mom(bas['sh_l'])
+    ezf.set_basis_shell_index(bas['sh_i'])
+    ezf.set_basis_shell_prim_num(bas['sh_prim'])
 
-    ezfio.set_basis_typ('Gaussian')
-    ezfio.set_basis_basis(basname)
+    ezf.set_basis_typ('Gaussian')
+    ezf.set_basis_basis(basname)
 
     na,nb = mol.nelec
-    ezfio.set_electrons_elec_alpha_num(na)
-    ezfio.set_electrons_elec_beta_num(nb)
+    ezf.set_electrons_elec_alpha_num(na)
+    ezf.set_electrons_elec_beta_num(nb)
 
 
 def get_c2s_norm_l(l):
@@ -312,7 +318,8 @@ def save_mos_to_ezfio(mf,ezpath):
     aobas = aobas_from_mbas(mbas)
     bas = bas_from_mbas(mbas)
 
-    ezfio.set_file(ezpath)
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
 
     _, nmo = mf.mo_coeff.shape
 
@@ -335,8 +342,8 @@ def save_mos_to_ezfio(mf,ezpath):
         #coef_pyscf_cart = s2c.T @ coef_pyscf_sph
         coef_qp2_cart = c2s @ coef_pyscf_sph
 
-    ezfio.set_mo_basis_mo_num(nmo)
-    ezfio.set_mo_basis_mo_coef(coef_qp2_cart.T.tolist())
+    ezf.set_mo_basis_mo_num(nmo)
+    ezf.set_mo_basis_mo_coef(coef_qp2_cart.T.tolist())
     return
 
 def save_pyscf_to_ezfio(mf, ezpath):
@@ -345,5 +352,97 @@ def save_pyscf_to_ezfio(mf, ezpath):
     """
     save_mol_to_ezfio(mf.mol, ezpath)
     save_mos_to_ezfio(mf, ezpath)
+    return
+
+
+
+def get_hfdet(nmo,nab):
+    #ezf = ezfio_obj()
+    #ezf.set_file(ezpath)
+    #nmo = ezf.get_mo_basis_mo_num()
+    #na = ezf.get_electrons_elec_alpha_num()
+    #nb = ezf.get_electrons_elec_beta_num()
+    na,nb = nab
+    nint = get_n64_from_norb(nmo)
+    det8 = np.zeros((1,2,nint*64),dtype=np.uint8)
+    for i,ni in enumerate((na,nb)):
+        det8[:,i,:ni] += 1
+
+    det = np.packbits(det8,bitorder='little').view('int64')
+
+
+    return det.reshape(1,2,-1)
+
+def get_hfdet_from_ezfio(ezpath):
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    nmo = ezf.get_mo_basis_mo_num()
+    na = ezf.get_electrons_elec_alpha_num()
+    nb = ezf.get_electrons_elec_beta_num()
+
+    return get_hfdet(nmo,(na,nb))
+
+
+def make_det(nmo,aocc,bocc):
+    nint = get_n64_from_norb(nmo)
+    det8 = np.zeros((1,2,nint*64),dtype=np.uint8)
+    for i,iocc in enumerate((aocc,bocc)):
+        for iorb in iocc:
+            det8[0,i,iorb] = 1
+
+    det = np.packbits(det8,bitorder='little').view('int64')
+
+
+    return det.reshape(1,2,-1)
+
+
+def apply_hp(det0,hplist):
+    """
+    hplist: [(idx_i,spin_i, is_part_i), ...] for each particle/hole
+        is_part: False/True for hole/particle
+    """
+    ndet,nspin,nint = det0.shape
+    assert(ndet==1)
+    assert(nspin==2)
+    nmo = nint*64
+
+    abh = [[],[]]
+    abp = [[],[]]
+
+    for idx,spin,is_part in hplist:
+        if is_part:
+            abp[spin].append(idx)
+        else:
+            abh[spin].append(idx)
+
+    pmask = get_det(nmo, abp[0], abp[1])
+    hmask = get_det(nmo, abh[0], abh[1])
+
+    assert(np.bitwise_and(hmask,det0) == hmask)
+    assert(np.bitwise_and(np.bitwise_not(det0),pmask) == pmask)
+    hpmask = np.bitwise_or(hmask,pmask)
+
+    return np.bitwise_xor(hpmask,det0)
+
+
+
+def set_1det_exc(ezpath,hplist):
+    """
+    hplist: [(idx_i,spin_i, is_part_i), ...] for each particle/hole
+    is_part: False/True for hole/particle
+    """
+    hfdet = get_hfdet_from_ezfio(ezpath)
+    newdet = apply_hp(hfdet,hplist)
+
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    ezf.set_determinants_n_det(1)
+    ezf.set_determinants_psi_det(newdet.tolist())
+    ezf.set_determinants_psi_coef([[1]])
+    ezf.set_determinants_n_det_qp_edit(1)
+    ezf.set_determinants_psi_det_qp_edit(newdet.tolist())
+    ezf.set_determinants_psi_coef_qp_edit([[1]])
+    ezf.set_determinants_read_wf(True)
+
     return
 
