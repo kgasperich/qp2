@@ -588,7 +588,7 @@ def set_1det_exc(ezpath,hplist):
     return
 
 
-def save_1det_to_ezfio(mf, ezpath, hplist = None):
+def save_1det_to_ezfio(mf, ezpath, hplist = None, n_det_max = 10000):
     nao, nmo = mf.mo_coeff.shape
     N_int = ((nmo-1) // 64) + 1
 
@@ -601,7 +601,7 @@ def save_1det_to_ezfio(mf, ezpath, hplist = None):
     ezf.set_determinants_bit_kind(8)
     ezf.set_determinants_n_int(N_int)
     ezf.set_determinants_n_states(1)
-    ezf.set_determinants_n_det_max(1000)
+    ezf.set_determinants_n_det_max(n_det_max)
     ezf.set_determinants_selection_factor(0.2)
     if hplist==None:
         qpdet = ints_to_qpdet(hfdet, N_int)
@@ -657,14 +657,14 @@ def gen_core_ormas_atom(mf,hsym,psym):
 
     return hplist, ormas_info
 
-def save_ormas_ezfio(mf,hsym,psym,ezpath):
+def save_ormas_ezfio(mf,hsym,psym,ezpath,n_det_max=10000):
     hplist, ormas_info = gen_core_ormas_atom(mf,hsym,psym)
-    save_1det_to_ezfio(mf,ezpath,hplist)
+    save_1det_to_ezfio(mf,ezpath,hplist=hplist,n_det_max=n_det_max)
     set_ormas_ezfio(ezpath,ormas_info)
     return
 
-def save_ground_ezfio(mf,ezpath):
-    save_1det_to_ezfio(mf,ezpath)
+def save_ground_ezfio(mf,ezpath,n_det_max=10000):
+    save_1det_to_ezfio(mf,ezpath,n_det_max=n_det_max)
     return
 
 
