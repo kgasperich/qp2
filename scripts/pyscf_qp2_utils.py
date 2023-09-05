@@ -7,9 +7,8 @@ from ezfio import ezfio_obj
 import itertools
 import functools
 
+from collections import defaultdict
 
-def get_n64_from_norb(norb):
-    return ((norb-1)//64)+1
 
 @functools.lru_cache()
 def doublefactorial(n):
@@ -354,14 +353,156 @@ def save_pyscf_to_ezfio(mf, ezpath):
     save_mos_to_ezfio(mf, ezpath)
     return
 
+##################################################################
+
+def pyint_to_u64(i,n64):
+    """
+    non-negative python int (arbitrary size) to np array of uint64
+    """
+    b=i.to_bytes(n64*8,'little')
+    return np.frombuffer(b,dtype='uint64')
+
+def make_u64_psidet(inp):
+   if isinstance(inp, np.ndarray) and x.dtype in [np.uint64, np.int64]:
+       # if already a np array, no work to do
+       return inp.view('uint64').copy()
+   else:
+       try:
+           # directly from qp2 should already be int64
+           return np.array(inp,dtype='int64').view('uint64').copy()
+       except OverflowError:
+           pass
+       # ensure non-negative (should be either uint64 or arbitrary-sized int)
+       assert(np.min(inp) >= 0)
+       try:
+           return np.array(inp,dtype='uint64')
+       except OverflowError:
+           # each spindet should be single arbitrary-sized int
+           # dims of inp should be [ndet, nspin]
+           ndet, nspin = np.shape(inp)
+           maxval = np.max(inp)
+           nbit = maxval.bit_length()
+           n64 = ((nbit-1)//64)+1
+           assert(n64>1)
+
+           return np.array([pyint_to_u64(i,n64) for i in np.ravel(inp)],dtype='uint64').reshape(ndet,nspin,n64)
+
+def u64_1d_to_int(a):
+    """
+    a: 1d np array of uint64
+    """
+    return int.from_bytes(a.tobytes(),byteorder='little')
+
+def u64_array_to_int(a):
+    """
+    a: array of uint64 with dims [ndet, nspin, n64]
+    """
+    return np.array([[ int.from_bytes(sdet.tobytes(),byteorder='little') for sdet in det] for det in a],dtype=object)
+
+
+class PsiDet:
+    def __init__(self,inp):
+        self.psidet_u64 = inp
+
+    @property
+    def psidet_u64(self):
+        return self._psidet_u64
+
+    @psidet_u64.setter
+    def psidet_u64(self, inp):
+        self._psidet_u64 = make_u64_psidet(inp)
+
+
+    def to_i64(self):
+        return self._psidet_u64.view('int64')
+
+    def to_int(self):
+        return u64_array_to_int(self._psidet_u64)
+
+
+def long_int_to_uint64(i):
+    res = []
+    while i:
+        res.append(i%(1<<64))
+        i >>= 64
+    return res
+
+
+def u64int(i):
+    i = int(i)
+    return np.uint64(i if i >= 0 else 2**64 + i)
+
+def int_to_qpdet(sdet, nint):
+    return [(np.int64(np.uint64((sdet >> (64*i)) % (1<<64)))) for i in range(nint)]
+
+def ints_to_qpdet(detab, nint):
+    return [int_to_qpdet(sdet, nint) for sdet in detab]
+
+def det_to_bits(detsab):
+    """
+    input: detsab, array with shape (ndet, nspin, nint)
+    """
+    psidet = np.array(detsab,dtype=np.uint64)
+    ndet, nspin, nint = psidet.shape
+    psibits = np.unpackbits(psidet.view('uint8'),bitorder='little').reshape(ndet,nspin,-1)
+    return psibits
+
+def qp2_det_to_uint64(detab):
+    """
+    input: detab, pair of lists of int
+    [[a1,a2,...,aN],[b1,b2,...,bN]]
+    """
+    return list(map(lambda x: list(map(u64int, x)), detab))
+
+def qp2_det_to_uint64(detab):
+    return np.array(detab,dtype=np.int64).view('uint64')
+
+def spindet_to_pyint(sdet_list):
+    """
+    input: sdet, list of uint64
+    [a1,a2,...,aN]
+
+    convert from 64-bit chunks of orbs to arbitrary-length int
+    input is not validated.  Should already be uint64
+
+    >>> spindet_to_pyint([1])
+    1
+    >>> spindet_to_pyint([1,1])
+    18446744073709551617
+    >>> spindet_to_pyint([1,2])
+    36893488147419103233
+    >>> spindet_to_pyint([2,1])
+    18446744073709551618
+    >>> spindet_to_pyint([1,1,1])
+    340282366920938463481821351505477763073
+
+    """
+
+    sdet = 0
+    for i, ai in enumerate(sdet_list):
+        sdet += int(ai) << (64 * i)
+    return sdet
+
+
+def det_to_pyint(detab):
+    """
+    input: detab, pair of lists of uint64
+    [[a1,a2,...,aN],[b1,b2,...,bN]]
+    """
+
+    return list(map(spindet_to_pyint, detab))
+
+
+def qp2_det_to_pyint(detab):
+    return det_to_pyint(qp2_det_to_uint64(detab))
+
+
+
+def get_n64_from_norb(norb):
+    return ((norb-1)//64)+1
 
 
 def get_hfdet(nmo,nab):
-    #ezf = ezfio_obj()
-    #ezf.set_file(ezpath)
-    #nmo = ezf.get_mo_basis_mo_num()
-    #na = ezf.get_electrons_elec_alpha_num()
-    #nb = ezf.get_electrons_elec_beta_num()
     na,nb = nab
     nint = get_n64_from_norb(nmo)
     det8 = np.zeros((1,2,nint*64),dtype=np.uint8)
@@ -415,11 +556,11 @@ def apply_hp(det0,hplist):
         else:
             abh[spin].append(idx)
 
-    pmask = get_det(nmo, abp[0], abp[1])
-    hmask = get_det(nmo, abh[0], abh[1])
+    pmask = make_det(nmo, abp[0], abp[1])
+    hmask = make_det(nmo, abh[0], abh[1])
 
-    assert(np.bitwise_and(hmask,det0) == hmask)
-    assert(np.bitwise_and(np.bitwise_not(det0),pmask) == pmask)
+    assert(np.all(np.bitwise_and(hmask,det0) == hmask))
+    assert(np.all(np.bitwise_and(np.bitwise_not(det0),pmask) == pmask))
     hpmask = np.bitwise_or(hmask,pmask)
 
     return np.bitwise_xor(hpmask,det0)
@@ -445,4 +586,85 @@ def set_1det_exc(ezpath,hplist):
     ezf.set_determinants_read_wf(True)
 
     return
+
+
+def save_1det_to_ezfio(mf, ezpath, hplist = None):
+    nao, nmo = mf.mo_coeff.shape
+    N_int = ((nmo-1) // 64) + 1
+
+    hfdet = get_hfdet(nmo, mf.mol.nelec)
+
+    save_pyscf_to_ezfio(mf, ezpath)
+
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    ezf.set_determinants_bit_kind(8)
+    ezf.set_determinants_n_int(N_int)
+    ezf.set_determinants_n_states(1)
+    ezf.set_determinants_n_det_max(1000)
+    ezf.set_determinants_selection_factor(0.2)
+    if hplist==None:
+        qpdet = ints_to_qpdet(hfdet, N_int)
+    else:
+        qpdet = apply_hp(hfdet, hplist)
+
+    ezf.set_determinants_mo_label('None')
+    ezf.set_determinants_n_det(1)
+    ezf.set_determinants_n_det_qp_edit(1)
+    ezf.set_determinants_psi_det(qpdet)
+    ezf.set_determinants_psi_det_qp_edit(qpdet)
+    ezf.set_determinants_psi_coef([[1]])
+    ezf.set_determinants_psi_coef_qp_edit([[1]])
+    ezf.set_determinants_read_wf(True)
+
+    return
+
+def set_ormas_ezfio(ezpath, ormas_info):
+    nspace, min_e, max_e, mstart = ormas_info
+
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    ezf.set_bitmask_do_ormas(True)
+    ezf.set_bitmask_ormas_n_space(nspace)
+    ezf.set_bitmask_ormas_min_e(min_e)
+    ezf.set_bitmask_ormas_max_e(max_e)
+    ezf.set_bitmask_ormas_mstart(mstart)
+    return
+    
+
+def gen_core_ormas_atom(mf,hsym,psym):
+    from pyscf.symm.basis import _SO3_ID2SYMB
+    orblist = [(i,occ,symid,_SO3_ID2SYMB[symid]) for i,(occ,symid) in enumerate(zip(mf.mo_occ,mf.orbsym))]
+    virtlist = [ i for i in orblist if i[1]==0]
+    symb_to_orbidx = defaultdict(list)
+    for i,occ,_,symb in orblist:
+        symb_to_orbidx[symb,round(occ)].append(i)
+    #print(symb_to_orbidx)
+    #print(psym)
+    hole_idx = min(symb_to_orbidx[hsym,2]) # lowest doubly-occ orb of this sym
+    part_idx = min(symb_to_orbidx[psym,0]) # lowest unocc orb of this sym
+
+    hplist = [(hole_idx,0,False),(part_idx,0,True)]
+
+    nelec = mf.mol.nelec
+    nelec_tot = sum(nelec)
+
+    ormas_nspace = 2
+    ormas_min_e = (0, nelec_tot - 1)
+    ormas_max_e = (1, nelec_tot)
+    ormas_mstart = (1,2)
+    ormas_info = (ormas_nspace, ormas_min_e, ormas_max_e, ormas_mstart)
+
+    return hplist, ormas_info
+
+def save_ormas_ezfio(mf,hsym,psym,ezpath):
+    hplist, ormas_info = gen_core_ormas_atom(mf,hsym,psym)
+    save_1det_to_ezfio(mf,ezpath,hplist)
+    set_ormas_ezfio(ezpath,ormas_info)
+    return
+
+def save_ground_ezfio(mf,ezpath):
+    save_1det_to_ezfio(mf,ezpath)
+    return
+
 
