@@ -423,6 +423,13 @@ class PsiDet:
         ndet,nspin,nint = self._psidet_u64.shape
         return np.unpackbits(self._psidet_u64.view('uint8'),bitorder='little').reshape(ndet,nspin,-1)
 
+    def unique_alpha(self):
+        return set([tuple(i) for i in self._psidet_u64[:,0,:]])
+
+    def unique_beta(self):
+        return set([tuple(i) for i in self._psidet_u64[:,1,:]])
+
+
 
 def long_int_to_uint64(i):
     res = []
@@ -523,6 +530,9 @@ def get_hpmask_u64(d1,d2):
     return np.bitwise_xor(d1,d2)
     #return np.unpackbits(np.bitwise_xor(d1,d2),bitorder='little').reshape(2,-1)
 
+def get_is_single(d1,d2):
+    return np.sum(i.bit_count() for i in np.bitwise_xor(d1,d2).ravel())
+
 
 def make_tdm(psi1,psi2,norb=None):
 
@@ -555,6 +565,39 @@ def make_tdm(psi1,psi2,norb=None):
                 phase = 1  #TODO: compute phase
                 tdm1[hspin, hidx, pidx] += phase * ci * cj
     return tdm1
+
+def make_tdm_bits(psi1,psi2,norb=None):
+
+    c1,pd1 = psi1
+    c2,pd2 = psi2
+
+    d1 = pd1.to_bits()
+    d2 = pd2.to_bits()
+
+    nd1, nspin,  nbit  = d1.shape
+    nd2, nspin2, nbit2 = d2.shape
+    assert(nspin==nspin2)
+    assert(nbit==nbit2)
+    if norb==None:
+        norb = nbit
+
+    tdm1 = np.zeros((2,norb,norb),dtype=float)
+
+    #for (ci,di),(cj,dj) in itertools.product(zip(c1[0],d1),zip(c2[0],d2)):
+    for (ci,di) in zip(c1[0],d1):
+        for (cj,dj) in zip(c2[0],d2):
+            hpbits = np.logical_xor(di,dj)
+            if np.count_nonzero(hpbits) == 2:
+                h_b = np.logical_and(hpbits,di)
+                p_b = np.logical_and(hpbits,dj)
+                hspin, hidx = np.argwhere(h_b).ravel()
+                pspin, pidx = np.argwhere(p_b).ravel()
+                assert(hspin == pspin)
+
+                phase = 1  #TODO: compute phase
+                tdm1[hspin, hidx, pidx] += phase * ci * cj
+    return tdm1
+
 
 def get_hfdet(nmo,nab):
     na,nb = nab
