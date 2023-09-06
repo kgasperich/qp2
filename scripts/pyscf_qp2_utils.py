@@ -419,6 +419,10 @@ class PsiDet:
     def to_int(self):
         return u64_array_to_int(self._psidet_u64)
 
+    def to_bits(self):
+        ndet,nspin,nint = self._psidet_u64.shape
+        return np.unpackbits(self._psidet_u64.view('uint8'),bitorder='little').reshape(ndet,nspin,-1)
+
 
 def long_int_to_uint64(i):
     res = []
@@ -501,6 +505,56 @@ def qp2_det_to_pyint(detab):
 def get_n64_from_norb(norb):
     return ((norb-1)//64)+1
 
+
+def get_psi(ezpath):
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+
+    c0 = ezf.get_determinants_psi_coef()
+    d0 = ezf.get_determinants_psi_det()
+    d1 = PsiDet(d0)
+
+    return c0,d1
+
+def get_hpmask_u64(d1,d2):
+    """
+    d1,d2 each [nspin, nint]
+    """
+    return np.bitwise_xor(d1,d2)
+    #return np.unpackbits(np.bitwise_xor(d1,d2),bitorder='little').reshape(2,-1)
+
+
+def make_tdm(psi1,psi2,norb=None):
+
+    c1,pd1 = psi1
+    c2,pd2 = psi2
+
+    d1 = pd1.psidet_u64
+    d2 = pd2.psidet_u64
+
+    nd1, nspin,  nint  = d1.shape
+    nd2, nspin2, nint2 = d2.shape
+    assert(nspin==nspin2)
+    assert(nint==nint2)
+    if norb==None:
+        norb = 64 * nint
+
+    tdm1 = np.zeros((2,norb,norb),dtype=float)
+
+    #for (ci,di),(cj,dj) in itertools.product(zip(c1[0],d1),zip(c2[0],d2)):
+    for (ci,di) in zip(c1[0],d1):
+        for (cj,dj) in zip(c2[0],d2):
+            hpu64 = get_hpmask_u64(di,dj)
+            if np.unpackbits(hpu64.view('uint8'),bitorder='little').sum() == 2:
+                h_u64 = np.bitwise_and(hpu64,di)
+                p_u64 = np.bitwise_and(hpu64,dj)
+                hspin, hidx = np.argwhere(np.unpackbits(h_u64.view('uint8'),bitorder='little').reshape(2,-1)).ravel()
+                pspin, pidx = np.argwhere(np.unpackbits(p_u64.view('uint8'),bitorder='little').reshape(2,-1)).ravel()
+                assert(hspin == pspin)
+
+                phase = 1  #TODO: compute phase
+                tdm1[hspin, hidx, pidx] += phase * ci * cj
+    return tdm1
 
 def get_hfdet(nmo,nab):
     na,nb = nab
