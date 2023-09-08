@@ -645,6 +645,17 @@ def get_hpmask_u64(d1,d2):
 def get_is_single(d1,d2):
     return np.sum(i.bit_count() for i in np.bitwise_xor(d1,d2).ravel())
 
+def get_phase_single(d1,h,p):
+    i=min(h,p)
+    j=max(h,p)
+    return -1 if bool(np.count_nonzero(d1[i+1:j]) % 2) else 1
+
+def get_phase_single_u64(d10,h,p):
+    i=min(h,p)
+    j=max(h,p)
+    d1 = np.unpackbits(np.array(d10,dtype=np.uint64).view('uint8'),bitorder='little')
+    return -1 if bool(np.count_nonzero(d1[i+1:j]) % 2) else 1
+    
 
 def make_tdm(psi1,psi2,norb=None):
 
@@ -674,7 +685,7 @@ def make_tdm(psi1,psi2,norb=None):
                 pspin, pidx = np.argwhere(np.unpackbits(p_u64.view('uint8'),bitorder='little').reshape(2,-1)).ravel()
                 assert(hspin == pspin)
 
-                phase = 1  #TODO: compute phase
+                phase = get_phase_single_u64(d1[hspin], hidx, pidx)
                 tdm1[hspin, hidx, pidx] += phase * ci * cj
     return tdm1
 
@@ -706,7 +717,7 @@ def make_tdm_bits(psi1,psi2,norb=None):
                 pspin, pidx = np.argwhere(p_b).ravel()
                 assert(hspin == pspin)
 
-                phase = 1  #TODO: compute phase
+                phase = get_phase_single(d1[hspin], hidx, pidx)
                 tdm1[hspin, hidx, pidx] += phase * ci * cj
     return tdm1
 
@@ -752,7 +763,8 @@ def make_tdm_sorted(psi1,psi2,norb=None):
                     pbits = np.unpackbits(pmask_u64.view('uint8'),bitorder='little')
                     hidx = np.argwhere(hbits)[0,0]
                     pidx = np.argwhere(pbits)[0,0]
-                    tdm1[0,hidx,pidx] += c1[0][pd1.bilinear_order[itot1]] * c2[0][pd2.bilinear_order[itot2]]
+                    phase = get_phase_single_u64(a1, hidx, pidx)
+                    tdm1[0,hidx,pidx] += phase * c1[0][pd1.bilinear_order[itot1]] * c2[0][pd2.bilinear_order[itot2]]
     # beta singles
     for ia1,a1 in enumerate(pd1.sorted_a_unique):
         ia2 = pd2.a_unique_map.get(a1,-1)
@@ -776,7 +788,8 @@ def make_tdm_sorted(psi1,psi2,norb=None):
                     pbits = np.unpackbits(pmask_u64.view('uint8'),bitorder='little')
                     hidx = np.argwhere(hbits)[0,0]
                     pidx = np.argwhere(pbits)[0,0]
-                    tdm1[1,hidx,pidx] += c1[0][pd1.bilinear_transp_order[itot1]] * c2[0][pd2.bilinear_transp_order[itot2]]
+                    phase = get_phase_single_u64(b1, hidx, pidx)
+                    tdm1[1,hidx,pidx] += phase * c1[0][pd1.bilinear_transp_order[itot1]] * c2[0][pd2.bilinear_transp_order[itot2]]
                     
     return tdm1
 
@@ -820,7 +833,8 @@ def make_tdm_sorted_bits(psi1,psi2,norb=None):
                     pbits = np.logical_and(a2,hpbits)
                     hidx = np.argwhere(hbits)[0,0]
                     pidx = np.argwhere(pbits)[0,0]
-                    tdm1[0,hidx,pidx] += c1[0][pd1.bilinear_order[itot1]] * c2[0][pd2.bilinear_order[itot2]]
+                    phase = get_phase_single(a1, hidx, pidx)
+                    tdm1[0,hidx,pidx] += phase * c1[0][pd1.bilinear_order[itot1]] * c2[0][pd2.bilinear_order[itot2]]
     # beta singles
     for ia1,a1 in enumerate(pd1.sorted_a_unique):
         ia2 = pd2.a_unique_map.get(a1,-1)
@@ -841,10 +855,111 @@ def make_tdm_sorted_bits(psi1,psi2,norb=None):
                     pbits = np.logical_and(b2,hpbits)
                     hidx = np.argwhere(hbits)[0,0]
                     pidx = np.argwhere(pbits)[0,0]
-                    tdm1[1,hidx,pidx] += c1[0][pd1.bilinear_transp_order[itot1]] * c2[0][pd2.bilinear_transp_order[itot2]]
+                    phase = get_phase_single(b1, hidx, pidx)
+                    tdm1[1,hidx,pidx] += phase * c1[0][pd1.bilinear_transp_order[itot1]] * c2[0][pd2.bilinear_transp_order[itot2]]
                     
     return tdm1
 
+def make_tdm_sorted_bits_diag(psi1,psi2,norb=None):
+
+    c1,pd1 = psi1
+    c2,pd2 = psi2
+    pd1.make_bilinear()
+    pd2.make_bilinear()
+
+    d1 = pd1.to_bits()
+    d2 = pd2.to_bits()
+
+    nd1, nspin,  nbit  = d1.shape
+    nd2, nspin2, nbit2 = d2.shape
+    assert(nspin==nspin2)
+    assert(nbit==nbit2)
+    if norb==None:
+        norb = nbit
+
+    tdm1 = np.zeros((2,norb,norb),dtype=float)
+
+    # alpha singles
+    for ib1,b1 in enumerate(pd1.sorted_b_unique):
+        ib2 = pd2.b_unique_map.get(b1,-1)
+        if ib2<0:
+            continue #b1 not in wf2
+        itot1_0 = pd1.bilinear_cols_loc[ib1]
+        itot1_1 = pd1.bilinear_cols_loc[ib1+1]
+        itot2_0 = pd2.bilinear_cols_loc[ib2]
+        itot2_1 = pd2.bilinear_cols_loc[ib2+1]
+        
+        for itot1 in range(itot1_0,itot1_1):
+            a1 = pd1.sorted_a_unique_bits[pd1.bilinear_rows[itot1]]
+            for itot2 in range(itot2_0,itot2_1):
+                a2 = pd2.sorted_a_unique_bits[pd2.bilinear_rows[itot2]]
+                hpbits = np.logical_xor(a1,a2)
+                nph = np.count_nonzero(hpbits)
+                if nph == 2:
+                    hbits = np.logical_and(a1,hpbits)
+                    pbits = np.logical_and(a2,hpbits)
+                    hidx = np.argwhere(hbits)[0,0]
+                    pidx = np.argwhere(pbits)[0,0]
+                    phase = get_phase_single(a1, hidx, pidx)
+                    tdm1[0,hidx,pidx] += phase * c1[0][pd1.bilinear_order[itot1]] * c2[0][pd2.bilinear_order[itot2]]
+                elif nph == 0:
+                    b_bits = pd1.sorted_b_unique_bits[ib1]
+                    a_bits = a1
+                    for i_a in np.argwhere(a_bits.ravel()):
+                        tdm1[0,i_a,i_a] += c1[0][pd1.bilinear_order[itot1]] * c2[0][pd2.bilinear_order[itot2]]
+                    for i_b in np.argwhere(b_bits.ravel()):
+                        tdm1[1,i_b,i_b] += c1[0][pd1.bilinear_order[itot1]] * c2[0][pd2.bilinear_order[itot2]]
+    # beta singles
+    for ia1,a1 in enumerate(pd1.sorted_a_unique):
+        ia2 = pd2.a_unique_map.get(a1,-1)
+        if ia2<0:
+            continue #a1 not in wf2
+        itot1_0 = pd1.bilinear_transp_rows_loc[ia1]
+        itot1_1 = pd1.bilinear_transp_rows_loc[ia1+1]
+        itot2_0 = pd2.bilinear_transp_rows_loc[ia2]
+        itot2_1 = pd2.bilinear_transp_rows_loc[ia2+1]
+        
+        for itot1 in range(itot1_0,itot1_1):
+            b1 = pd1.sorted_b_unique_bits[pd1.bilinear_transp_cols[itot1]]
+            for itot2 in range(itot2_0,itot2_1):
+                b2 = pd2.sorted_b_unique_bits[pd2.bilinear_transp_cols[itot2]]
+                hpbits = np.logical_xor(b1,b2)
+                if np.count_nonzero(hpbits) == 2:
+                    hbits = np.logical_and(b1,hpbits)
+                    pbits = np.logical_and(b2,hpbits)
+                    hidx = np.argwhere(hbits)[0,0]
+                    pidx = np.argwhere(pbits)[0,0]
+                    phase = get_phase_single(b1, hidx, pidx)
+                    tdm1[1,hidx,pidx] += phase * c1[0][pd1.bilinear_transp_order[itot1]] * c2[0][pd2.bilinear_transp_order[itot2]]
+                    
+    return tdm1
+
+
+def test_phase_single_wf(psi1,norb=None):
+
+    c1,pd1 = psi1
+
+    d1 = pd1.to_bits()
+
+    nd1, nspin,  nbit  = d1.shape
+    if norb==None:
+        norb = nbit
+    
+    res = []
+    for i,di in enumerate(d1):
+        for j,dj in enumerate(d1):
+            hpbits = np.logical_xor(di,dj)
+            if np.count_nonzero(hpbits) == 2:
+                h_b = np.logical_and(hpbits,di)
+                p_b = np.logical_and(hpbits,dj)
+                hspin, hidx = np.argwhere(h_b).ravel()
+                pspin, pidx = np.argwhere(p_b).ravel()
+                
+                assert(hspin == pspin)
+                phase = get_phase_single(di[hspin],hidx,pidx)
+                res.append((i,j,phase))
+
+    return res
 
 
 def get_hfdet(nmo,nab):
@@ -931,6 +1046,18 @@ def set_1det_exc(ezpath,hplist):
     ezf.set_determinants_read_wf(True)
 
     return
+
+def get_1rdm_mo(ezpath):
+    """
+    hplist: [(idx_i,spin_i, is_part_i), ...] for each particle/hole
+    is_part: False/True for hole/particle
+    """
+
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    rdma = ezf.get_aux_quantities_data_one_e_dm_alpha_mo()
+    rdmb = ezf.get_aux_quantities_data_one_e_dm_beta_mo()
+    return np.array([rdma,rdmb])
 
 
 def save_1det_to_ezfio(mf, ezpath, hplist = None, n_det_max = 10000):
