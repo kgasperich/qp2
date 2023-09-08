@@ -436,6 +436,8 @@ class PsiDet:
         self.sorted_b_unique = self.unique_beta()
         self.n_alpha_unique = len(self.sorted_a_unique)
         self.n_beta_unique  = len(self.sorted_b_unique)
+        self.sorted_a_unique_bits = np.unpackbits(np.array(self.sorted_a_unique).view('uint8'),bitorder='little').reshape(self.n_alpha_unique,-1)
+        self.sorted_b_unique_bits = np.unpackbits(np.array(self.sorted_b_unique).view('uint8'),bitorder='little').reshape(self.n_beta_unique,-1)
         self.a_unique_map = {d: i for i,d in enumerate(self.sorted_a_unique)}
         self.b_unique_map = {d: i for i,d in enumerate(self.sorted_b_unique)}
         
@@ -777,6 +779,72 @@ def make_tdm_sorted(psi1,psi2,norb=None):
                     tdm1[1,hidx,pidx] += c1[0][pd1.bilinear_transp_order[itot1]] * c2[0][pd2.bilinear_transp_order[itot2]]
                     
     return tdm1
+
+
+def make_tdm_sorted_bits(psi1,psi2,norb=None):
+
+    c1,pd1 = psi1
+    c2,pd2 = psi2
+    pd1.make_bilinear()
+    pd2.make_bilinear()
+
+    d1 = pd1.to_bits()
+    d2 = pd2.to_bits()
+
+    nd1, nspin,  nbit  = d1.shape
+    nd2, nspin2, nbit2 = d2.shape
+    assert(nspin==nspin2)
+    assert(nbit==nbit2)
+    if norb==None:
+        norb = nbit
+
+    tdm1 = np.zeros((2,norb,norb),dtype=float)
+
+    # alpha singles
+    for ib1,b1 in enumerate(pd1.sorted_b_unique):
+        ib2 = pd2.b_unique_map.get(b1,-1)
+        if ib2<0:
+            continue #b1 not in wf2
+        itot1_0 = pd1.bilinear_cols_loc[ib1]
+        itot1_1 = pd1.bilinear_cols_loc[ib1+1]
+        itot2_0 = pd2.bilinear_cols_loc[ib2]
+        itot2_1 = pd2.bilinear_cols_loc[ib2+1]
+        
+        for itot1 in range(itot1_0,itot1_1):
+            a1 = pd1.sorted_a_unique_bits[pd1.bilinear_rows[itot1]]
+            for itot2 in range(itot2_0,itot2_1):
+                a2 = pd2.sorted_a_unique_bits[pd2.bilinear_rows[itot2]]
+                hpbits = np.logical_xor(a1,a2)
+                if np.count_nonzero(hpbits) == 2:
+                    hbits = np.logical_and(a1,hpbits)
+                    pbits = np.logical_and(a2,hpbits)
+                    hidx = np.argwhere(hbits)[0,0]
+                    pidx = np.argwhere(pbits)[0,0]
+                    tdm1[0,hidx,pidx] += c1[0][pd1.bilinear_order[itot1]] * c2[0][pd2.bilinear_order[itot2]]
+    # beta singles
+    for ia1,a1 in enumerate(pd1.sorted_a_unique):
+        ia2 = pd2.a_unique_map.get(a1,-1)
+        if ia2<0:
+            continue #a1 not in wf2
+        itot1_0 = pd1.bilinear_transp_rows_loc[ia1]
+        itot1_1 = pd1.bilinear_transp_rows_loc[ia1+1]
+        itot2_0 = pd2.bilinear_transp_rows_loc[ia2]
+        itot2_1 = pd2.bilinear_transp_rows_loc[ia2+1]
+        
+        for itot1 in range(itot1_0,itot1_1):
+            b1 = pd1.sorted_b_unique_bits[pd1.bilinear_transp_cols[itot1]]
+            for itot2 in range(itot2_0,itot2_1):
+                b2 = pd2.sorted_b_unique_bits[pd2.bilinear_transp_cols[itot2]]
+                hpbits = np.logical_xor(b1,b2)
+                if np.count_nonzero(hpbits) == 2:
+                    hbits = np.logical_and(b1,hpbits)
+                    pbits = np.logical_and(b2,hpbits)
+                    hidx = np.argwhere(hbits)[0,0]
+                    pidx = np.argwhere(pbits)[0,0]
+                    tdm1[1,hidx,pidx] += c1[0][pd1.bilinear_transp_order[itot1]] * c2[0][pd2.bilinear_transp_order[itot2]]
+                    
+    return tdm1
+
 
 
 def get_hfdet(nmo,nab):
