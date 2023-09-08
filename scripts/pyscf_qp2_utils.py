@@ -1142,7 +1142,7 @@ def set_ormas_ezfio(ezpath, ormas_info):
     return
     
 
-def gen_core_ormas_atom(mf,hsym,psym):
+def gen_core_ormas_atom(mf,hsym,psym,spin_idx=0):
     from pyscf.symm.basis import _SO3_ID2SYMB
     orblist = [(i,occ,symid,_SO3_ID2SYMB[symid]) for i,(occ,symid) in enumerate(zip(mf.mo_occ,mf.orbsym))]
     virtlist = [ i for i in orblist if i[1]==0]
@@ -1154,7 +1154,7 @@ def gen_core_ormas_atom(mf,hsym,psym):
     hole_idx = min(symb_to_orbidx[hsym,2]) # lowest doubly-occ orb of this sym
     part_idx = min(symb_to_orbidx[psym,0]) # lowest unocc orb of this sym
 
-    hplist = [(hole_idx,0,False),(part_idx,0,True)]
+    hplist = [(hole_idx,spin_idx,False),(part_idx,spin_idx,True)]
 
     nelec = mf.mol.nelec
     nelec_tot = sum(nelec)
@@ -1167,8 +1167,8 @@ def gen_core_ormas_atom(mf,hsym,psym):
 
     return hplist, ormas_info
 
-def save_ormas_ezfio(mf,hsym,psym,ezpath,n_det_max=10000):
-    hplist, ormas_info = gen_core_ormas_atom(mf,hsym,psym)
+def save_ormas_ezfio(mf,hsym,psym,ezpath,n_det_max=10000,spin_idx=0):
+    hplist, ormas_info = gen_core_ormas_atom(mf,hsym,psym,spin_idx=spin_idx)
     save_1det_to_ezfio(mf,ezpath,hplist=hplist,n_det_max=n_det_max)
     set_ormas_ezfio(ezpath,ormas_info)
     return
