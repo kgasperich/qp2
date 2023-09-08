@@ -25,7 +25,7 @@ subroutine printmat(A,n1,n2,name,thresh)
 
   character*(128) :: output
 
-  output = trim(ezfio_filename)//'.'//name
+  output = trim(ezfio_filename)//'/.'//name
   i_unit_output = getUnitAndOpen(output,'w')
 
   do i=1,n1
