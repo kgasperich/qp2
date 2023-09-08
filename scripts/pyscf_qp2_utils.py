@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python
 
 import numpy as np
@@ -424,10 +423,121 @@ class PsiDet:
         return np.unpackbits(self._psidet_u64.view('uint8'),bitorder='little').reshape(ndet,nspin,-1)
 
     def unique_alpha(self):
-        return set([tuple(i) for i in self._psidet_u64[:,0,:]])
+        # return set([tuple(i) for i in self._psidet_u64[:,0,:]])
+        return sorted(set([tuple(i) for i in self._psidet_u64[:,0,:]]), key=lambda x: tuple(reversed(x)))
 
     def unique_beta(self):
-        return set([tuple(i) for i in self._psidet_u64[:,1,:]])
+        # return set([tuple(i) for i in self._psidet_u64[:,1,:]])
+        return sorted(set([tuple(i) for i in self._psidet_u64[:,1,:]]), key=lambda x: tuple(reversed(x)))
+    
+    def make_bilinear(self):
+        self.ndet = len(self.psidet_u64)
+        self.sorted_a_unique = self.unique_alpha()
+        self.sorted_b_unique = self.unique_beta()
+        self.n_alpha_unique = len(self.sorted_a_unique)
+        self.n_beta_unique  = len(self.sorted_b_unique)
+        self.a_unique_map = {d: i for i,d in enumerate(self.sorted_a_unique)}
+        self.b_unique_map = {d: i for i,d in enumerate(self.sorted_b_unique)}
+        
+        tmp_rows = np.zeros(self.ndet,dtype=np.int64) - 1
+        tmp_cols = np.zeros(self.ndet,dtype=np.int64) - 1
+        to_sort = np.zeros(self.ndet,dtype=np.int64) - 1
+        
+        
+        for k,dab in enumerate(self.psidet_u64):
+            i = self.a_unique_map[tuple(dab[0])]
+            j = self.b_unique_map[tuple(dab[1])]
+            tmp_rows[k] = i
+            tmp_cols[k] = j
+            to_sort[k] = self.n_alpha_unique * j + i
+        
+        self.bilinear_order = np.argsort(to_sort)
+        self.bilinear_rows = tmp_rows[self.bilinear_order]
+        self.bilinear_cols = tmp_cols[self.bilinear_order]
+        self.bilinear_order_reverse = np.argsort(self.bilinear_order)
+        
+        
+        self.bilinear_cols_loc = np.zeros(self.n_beta_unique + 1, dtype=np.int64) - 1
+        l = self.bilinear_cols[0]
+        self.bilinear_cols_loc[l] = 0
+        for k in range(1,self.ndet):
+            if self.bilinear_cols[k] == self.bilinear_cols[k-1]:
+                continue
+            else:
+                l = self.bilinear_cols[k]
+                self.bilinear_cols_loc[l] = k
+            if self.bilinear_cols[k] < 0:
+                raise
+        self.bilinear_cols_loc[self.n_beta_unique] = self.ndet
+        
+        # tmp_rows = np.zeros(self.ndet,dtype=np.int64) - 1
+        # tmp_cols = np.zeros(self.ndet,dtype=np.int64) - 1
+        # to_sort = np.zeros(self.ndet,dtype=np.int64) - 1
+        
+        # for k,dab in enumerate(self.psidet_u64):
+        #     tmp_cols[k] = self.bilinear_cols[k]
+        #     tmp_rows[k] = self.bilinear_rows[k]
+        #     i = tmp_cols[k]
+        #     j = tmp_rows[k]
+        #     to_sort[k] = self.n_beta_unique * j + i
+            
+        # self.bilinear_transp_order = np.argsort(to_sort)
+        # self.bilinear_transp_rows = tmp_rows[self.bilinear_transp_order]
+        # self.bilinear_transp_cols = tmp_cols[self.bilinear_transp_order]
+        # self.bilinear_transp_order_reverse = np.argsort(self.bilinear_transp_order)
+        
+        # tmp_rows = np.zeros(self.ndet,dtype=np.int64) - 1
+        # tmp_cols = np.zeros(self.ndet,dtype=np.int64) - 1
+        # to_sort = np.zeros(self.ndet,dtype=np.int64) - 1
+        
+        # for k,dab in enumerate(self.psidet_u64):
+            
+        #     i = self.b_unique_map[tuple(dab[1])]
+        #     j = self.a_unique_map[tuple(dab[0])]
+        #     tmp_rows[k] = i
+        #     tmp_cols[k] = j
+        #     to_sort[k] = self.n_beta_unique * j + i
+            
+        # self.bilinear_transp_order = np.argsort(to_sort)
+        # self.bilinear_transp_rows = tmp_rows[self.bilinear_transp_order]
+        # self.bilinear_transp_cols = tmp_cols[self.bilinear_transp_order]
+        # self.bilinear_transp_order_reverse = np.argsort(self.bilinear_transp_order)
+        
+        tmp_rows = np.zeros(self.ndet,dtype=np.int64) - 1
+        tmp_cols = np.zeros(self.ndet,dtype=np.int64) - 1
+        to_sort = np.zeros(self.ndet,dtype=np.int64) - 1
+        
+        for k,dab in enumerate(self.psidet_u64):
+            
+            i = self.b_unique_map[tuple(dab[1])]
+            j = self.a_unique_map[tuple(dab[0])]
+            tmp_rows[k] = j
+            tmp_cols[k] = i
+            to_sort[k] = self.n_beta_unique * j + i
+            
+        self.bilinear_transp_order = np.argsort(to_sort)
+        self.bilinear_transp_rows = tmp_rows[self.bilinear_transp_order]
+        self.bilinear_transp_cols = tmp_cols[self.bilinear_transp_order]
+        self.bilinear_transp_order_reverse = np.argsort(self.bilinear_transp_order)
+        
+        
+        self.bilinear_transp_rows_loc = np.zeros(self.n_alpha_unique + 1, dtype=np.int64) - 1
+        l = self.bilinear_transp_rows[0]
+        self.bilinear_transp_rows_loc[l] = 0
+        for k in range(1,self.ndet):
+            if self.bilinear_transp_rows[k] == self.bilinear_transp_rows[k-1]:
+                continue
+            else:
+                l = self.bilinear_transp_rows[k]
+                self.bilinear_transp_rows_loc[l] = k
+
+        self.bilinear_transp_rows_loc[self.n_alpha_unique] = self.ndet
+        
+        
+        
+        
+        
+        
 
 
 
@@ -596,6 +706,76 @@ def make_tdm_bits(psi1,psi2,norb=None):
 
                 phase = 1  #TODO: compute phase
                 tdm1[hspin, hidx, pidx] += phase * ci * cj
+    return tdm1
+
+def make_tdm_sorted(psi1,psi2,norb=None):
+
+    c1,pd1 = psi1
+    c2,pd2 = psi2
+    pd1.make_bilinear()
+    pd2.make_bilinear()
+
+    d1 = pd1.to_bits()
+    d2 = pd2.to_bits()
+
+    nd1, nspin,  nbit  = d1.shape
+    nd2, nspin2, nbit2 = d2.shape
+    assert(nspin==nspin2)
+    assert(nbit==nbit2)
+    if norb==None:
+        norb = nbit
+
+    tdm1 = np.zeros((2,norb,norb),dtype=float)
+
+    # alpha singles
+    for ib1,b1 in enumerate(pd1.sorted_b_unique):
+        ib2 = pd2.b_unique_map.get(b1,-1)
+        if ib2<0:
+            continue #b1 not in wf2
+        itot1_0 = pd1.bilinear_cols_loc[ib1]
+        itot1_1 = pd1.bilinear_cols_loc[ib1+1]
+        itot2_0 = pd2.bilinear_cols_loc[ib2]
+        itot2_1 = pd2.bilinear_cols_loc[ib2+1]
+        
+        for itot1 in range(itot1_0,itot1_1):
+            a1 = pd1.sorted_a_unique[pd1.bilinear_rows[itot1]]
+            for itot2 in range(itot2_0,itot2_1):
+                a2 = pd2.sorted_a_unique[pd2.bilinear_rows[itot2]]
+                hpmask_u64 = np.bitwise_xor(a1,a2)
+                hpbits = np.unpackbits(hpmask_u64.view('uint8'),bitorder='little')
+                if hpbits.sum() == 2:
+                    hmask_u64 = np.bitwise_and(a1,hpmask_u64)
+                    pmask_u64 = np.bitwise_and(a2,hpmask_u64)
+                    hbits = np.unpackbits(hmask_u64.view('uint8'),bitorder='little')
+                    pbits = np.unpackbits(pmask_u64.view('uint8'),bitorder='little')
+                    hidx = np.argwhere(hbits)[0,0]
+                    pidx = np.argwhere(pbits)[0,0]
+                    tdm1[0,hidx,pidx] += c1[0][pd1.bilinear_order[itot1]] * c2[0][pd2.bilinear_order[itot2]]
+    # beta singles
+    for ia1,a1 in enumerate(pd1.sorted_a_unique):
+        ia2 = pd2.a_unique_map.get(a1,-1)
+        if ia2<0:
+            continue #a1 not in wf2
+        itot1_0 = pd1.bilinear_transp_rows_loc[ia1]
+        itot1_1 = pd1.bilinear_transp_rows_loc[ia1+1]
+        itot2_0 = pd2.bilinear_transp_rows_loc[ia2]
+        itot2_1 = pd2.bilinear_transp_rows_loc[ia2+1]
+        
+        for itot1 in range(itot1_0,itot1_1):
+            b1 = pd1.sorted_b_unique[pd1.bilinear_transp_cols[itot1]]
+            for itot2 in range(itot2_0,itot2_1):
+                b2 = pd2.sorted_b_unique[pd2.bilinear_transp_cols[itot2]]
+                hpmask_u64 = np.bitwise_xor(b1,b2)
+                hpbits = np.unpackbits(hpmask_u64.view('uint8'),bitorder='little')
+                if hpbits.sum() == 2:
+                    hmask_u64 = np.bitwise_and(b1,hpmask_u64)
+                    pmask_u64 = np.bitwise_and(b2,hpmask_u64)
+                    hbits = np.unpackbits(hmask_u64.view('uint8'),bitorder='little')
+                    pbits = np.unpackbits(pmask_u64.view('uint8'),bitorder='little')
+                    hidx = np.argwhere(hbits)[0,0]
+                    pidx = np.argwhere(pbits)[0,0]
+                    tdm1[1,hidx,pidx] += c1[0][pd1.bilinear_transp_order[itot1]] * c2[0][pd2.bilinear_transp_order[itot2]]
+                    
     return tdm1
 
 
