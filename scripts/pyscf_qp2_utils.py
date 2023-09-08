@@ -7,6 +7,8 @@ import itertools
 import functools
 
 from collections import defaultdict
+import os
+import re
 
 
 @functools.lru_cache()
@@ -400,8 +402,13 @@ def u64_array_to_int(a):
 
 
 class PsiDet:
-    def __init__(self,inp):
+    def __init__(self,inp,norb=None):
         self.psidet_u64 = inp
+        self.ndet, self.nspin, self.n64 = self._psidet_u64.shape
+        if norb:
+            self.norb = norb
+        else:
+            self.norb = np.argwhere(self.to_bits().reshape(-1,self.n64*64).sum(axis=0)>0).max()+1
 
     @property
     def psidet_u64(self):
@@ -631,7 +638,8 @@ def get_psi(ezpath):
 
     c0 = ezf.get_determinants_psi_coef()
     d0 = ezf.get_determinants_psi_det()
-    d1 = PsiDet(d0)
+    norb = ezf.get_mo_basis_mo_num()
+    d1 = PsiDet(d0,norb=norb)
 
     return c0,d1
 
@@ -657,10 +665,13 @@ def get_phase_single_u64(d10,h,p):
     return -1 if bool(np.count_nonzero(d1[i+1:j]) % 2) else 1
     
 
-def make_tdm(psi1,psi2,norb=None):
+def make_tdm(psi1,psi2):
 
     c1,pd1 = psi1
     c2,pd2 = psi2
+    norb = pd1.norb
+    assert(pd2.norb == norb)
+    
 
     d1 = pd1.psidet_u64
     d2 = pd2.psidet_u64
@@ -689,10 +700,13 @@ def make_tdm(psi1,psi2,norb=None):
                 tdm1[hspin, hidx, pidx] += phase * ci * cj
     return tdm1
 
-def make_tdm_bits(psi1,psi2,norb=None):
+def make_tdm_bits(psi1,psi2):
 
     c1,pd1 = psi1
     c2,pd2 = psi2
+    norb = pd1.norb
+    assert(pd2.norb == norb)
+    
 
     d1 = pd1.to_bits()
     d2 = pd2.to_bits()
@@ -701,8 +715,6 @@ def make_tdm_bits(psi1,psi2,norb=None):
     nd2, nspin2, nbit2 = d2.shape
     assert(nspin==nspin2)
     assert(nbit==nbit2)
-    if norb==None:
-        norb = nbit
 
     tdm1 = np.zeros((2,norb,norb),dtype=float)
 
@@ -721,10 +733,14 @@ def make_tdm_bits(psi1,psi2,norb=None):
                 tdm1[hspin, hidx, pidx] += phase * ci * cj
     return tdm1
 
-def make_tdm_sorted(psi1,psi2,norb=None):
+def make_tdm_sorted(psi1,psi2):
 
     c1,pd1 = psi1
     c2,pd2 = psi2
+    
+    norb = pd1.norb
+    assert(pd2.norb == norb)
+    
     pd1.make_bilinear()
     pd2.make_bilinear()
 
@@ -735,8 +751,6 @@ def make_tdm_sorted(psi1,psi2,norb=None):
     nd2, nspin2, nbit2 = d2.shape
     assert(nspin==nspin2)
     assert(nbit==nbit2)
-    if norb==None:
-        norb = nbit
 
     tdm1 = np.zeros((2,norb,norb),dtype=float)
 
@@ -794,10 +808,13 @@ def make_tdm_sorted(psi1,psi2,norb=None):
     return tdm1
 
 
-def make_tdm_sorted_bits(psi1,psi2,norb=None):
+def make_tdm_sorted_bits(psi1,psi2):
 
     c1,pd1 = psi1
     c2,pd2 = psi2
+    norb = pd1.norb
+    assert(pd2.norb == norb)
+    
     pd1.make_bilinear()
     pd2.make_bilinear()
 
@@ -808,8 +825,6 @@ def make_tdm_sorted_bits(psi1,psi2,norb=None):
     nd2, nspin2, nbit2 = d2.shape
     assert(nspin==nspin2)
     assert(nbit==nbit2)
-    if norb==None:
-        norb = nbit
 
     tdm1 = np.zeros((2,norb,norb),dtype=float)
 
@@ -860,10 +875,13 @@ def make_tdm_sorted_bits(psi1,psi2,norb=None):
                     
     return tdm1
 
-def make_tdm_sorted_bits_diag(psi1,psi2,norb=None):
+def make_tdm_sorted_bits_diag(psi1,psi2):
 
     c1,pd1 = psi1
     c2,pd2 = psi2
+    norb = pd1.norb
+    assert(pd2.norb == norb)
+    
     pd1.make_bilinear()
     pd2.make_bilinear()
 
@@ -874,8 +892,6 @@ def make_tdm_sorted_bits_diag(psi1,psi2,norb=None):
     nd2, nspin2, nbit2 = d2.shape
     assert(nspin==nspin2)
     assert(nbit==nbit2)
-    if norb==None:
-        norb = nbit
 
     tdm1 = np.zeros((2,norb,norb),dtype=float)
 
@@ -935,15 +951,14 @@ def make_tdm_sorted_bits_diag(psi1,psi2,norb=None):
     return tdm1
 
 
-def test_phase_single_wf(psi1,norb=None):
+def test_phase_single_wf(psi1):
 
     c1,pd1 = psi1
+    norb = pd1.norb
 
     d1 = pd1.to_bits()
 
     nd1, nspin,  nbit  = d1.shape
-    if norb==None:
-        norb = nbit
     
     res = []
     for i,di in enumerate(d1):
@@ -961,6 +976,29 @@ def test_phase_single_wf(psi1,norb=None):
 
     return res
 
+def read_dipoles(ezpath):
+    """
+    read nonzero matrix entries A[i,j]=v
+    one per line as " i  j  v "
+    """
+
+    ijv_str = r"\s*(?P<i>\d+)\s+(?P<j>\d+)\s+(?P<v>[+-]?\d+[\.]?\d*([eE][+-]?\d+)?)"
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    nao = ezf.get_ao_basis_ao_num()
+    nmo = ezf.get_mo_basis_mo_num()
+    dipoles = {}
+    for orb,norb in zip(('ao','mo'),(nao,nmo)):
+        for xs in 'xyz':
+            fpath = os.path.join(ezpath,f'.{orb}_dipole_{xs}')
+            if os.path.isfile(fpath):
+                dipoles[orb,xs] = np.zeros((norb,norb),dtype=float)
+                with open(fpath,'r') as dfile:
+                    for line in dfile:
+                        m = re.match(ijv_str,line)
+                        i,j,v = [f(m[s]) for f,s in zip((int,int,float),'ijv')]
+                        dipoles[orb,xs][i-1,j-1] = v
+    return dipoles
 
 def get_hfdet(nmo,nab):
     na,nb = nab
