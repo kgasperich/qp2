@@ -6,7 +6,7 @@ from ezfio import ezfio_obj
 import itertools
 import functools
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 import os
 import re
 
@@ -975,6 +975,54 @@ def test_phase_single_wf(psi1):
                 res.append((i,j,phase))
 
     return res
+
+
+def load_mf(chkpath):
+    from pyscf.lib import chkfile as libchk
+    from pyscf import scf
+    mol = libchk.load_mol(chkpath)
+    mf = scf.ROHF(mol)
+
+    # get converged scf data
+    mf.mo_coeff = libchk.load(chkpath, "scf/mo_coeff")
+    mf.mo_occ = libchk.load(chkpath, "scf/mo_occ")
+    mf.mo_energy = libchk.load(chkpath, "scf/mo_energy")
+    mf.e_tot = libchk.load(chkpath, "scf/e_tot")
+    return mf
+
+def guess_detsym(detab, orbsym):
+    strsa, strsb = detab
+
+    orbsym_in_d2h = np.asarray(orbsym) % 10  # convert to D2h irreps
+    airrep = 0
+    birrep = 0
+    for i, ir in enumerate(orbsym_in_d2h):
+        idx64 = i//64
+        if strsa[idx64] & (1 << (i%64)):
+            airrep ^= ir
+        if strsb[idx64] & (1 << (i%64)):
+            birrep ^= ir
+    return airrep ^ birrep
+
+
+def get_ci_sym(ezpath, chkpath):
+    """
+    get total symmetry of each det in CI wf
+    """
+    mf = load_mf(chkpath)
+    orbsym = mf.orbsym
+
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+
+    ci_coefs = ezf.get_determinants_psi_coef()
+    ci_dets = ezf.get_determinants_psi_det()
+
+    detsyms = [guess_detsym(i, orbsym) for i in ci_dets]
+    symcounts = Counter(detsyms)
+    print(f"ezpath = {ezpath}")
+    print(f"symcounts = {symcounts}")
+    return symcounts, (ci_coefs, ci_dets, detsyms)
 
 def read_dipoles(ezpath):
     """
