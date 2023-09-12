@@ -9,6 +9,7 @@ import functools
 from collections import Counter, defaultdict
 import os
 import re
+from tqdm import tqdm
 
 
 @functools.lru_cache()
@@ -1004,6 +1005,20 @@ def guess_detsym(detab, orbsym):
             birrep ^= ir
     return airrep ^ birrep
 
+def guess_detsym_ab(detab, orbsym):
+    strsa, strsb = detab
+
+    orbsym_in_d2h = np.asarray(orbsym) % 10  # convert to D2h irreps
+    airrep = 0
+    birrep = 0
+    for i, ir in enumerate(orbsym_in_d2h):
+        idx64 = i//64
+        if strsa[idx64] & (1 << (i%64)):
+            airrep ^= ir
+        if strsb[idx64] & (1 << (i%64)):
+            birrep ^= ir
+    return (airrep ^ birrep), (airrep, birrep)
+
 
 def get_ci_sym(ezpath, chkpath):
     """
@@ -1018,11 +1033,57 @@ def get_ci_sym(ezpath, chkpath):
     ci_coefs = ezf.get_determinants_psi_coef()
     ci_dets = ezf.get_determinants_psi_det()
 
-    detsyms = [guess_detsym(i, orbsym) for i in ci_dets]
+    detsyms = [guess_detsym(i, orbsym) for i in tqdm(ci_dets)]
     symcounts = Counter(detsyms)
     print(f"ezpath = {ezpath}")
     print(f"symcounts = {symcounts}")
     return symcounts, (ci_coefs, ci_dets, detsyms)
+
+def get_ci_sym_partial(ezpath, chkpath, ndetmax = None):
+    """
+    get total symmetry of each det in CI wf
+    """
+    mf = load_mf(chkpath)
+    orbsym = mf.orbsym
+
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    if ndetmax is None:
+        ndetmax = ezf.get_determinants_n_det()
+    else:
+        ndetmax = min(ezf.get_determinants_n_det(), ndetmax)
+
+    # ci_coefs = ezf.get_determinants_psi_coef()
+    ci_dets = ezf.get_determinants_psi_det()[:ndetmax]
+
+    detsyms = [guess_detsym(i, orbsym) for i in tqdm(ci_dets)]
+    symcounts = Counter(detsyms)
+    print(f"ezpath = {ezpath}")
+    print(f"symcounts = {symcounts}")
+    return symcounts, (ci_dets, detsyms)
+
+def get_ci_sym_ab(ezpath, chkpath):
+    """
+    get total symmetry of each det in CI wf
+    """
+    mf = load_mf(chkpath)
+    orbsym = mf.orbsym
+
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+
+    ci_coefs = ezf.get_determinants_psi_coef()
+    ci_dets = ezf.get_determinants_psi_det()
+
+    detsyms_tab = [guess_detsym_ab(i, orbsym) for i in ci_dets]
+    detsyms_t = [i[0] for i in detsyms_tab]
+    detsyms_a = [i[1][0] for i in detsyms_tab]
+    detsyms_b = [i[1][1] for i in detsyms_tab]
+    symcounts_t = Counter(detsyms_t)
+    symcounts = Counter(detsyms_tab)
+    print(f"ezpath = {ezpath}")
+    print(f"symcounts = {symcounts}")
+    return symcounts, (ci_coefs, ci_dets, detsyms_tab)
 
 def read_dipoles(ezpath):
     """
@@ -1189,7 +1250,52 @@ def set_ormas_ezfio(ezpath, ormas_info):
     ezf.set_bitmask_ormas_mstart(mstart)
     return
     
+def flip_spin_ezfio(ezpath,iflip):
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    
+    na = ezf.get_electrons_elec_alpha_num()
+    nb = ezf.get_electrons_elec_beta_num()
+    
+    ezf.set_electrons_elec_alpha_num(na-1)
+    ezf.set_electrons_elec_beta_num(nb+1)
+    
+    qpdet0 = ezf.get_determinants_psi_det()
+    npdet0 = np.array(qpdet0,dtype=np.int64)
+    ndet, nspin, nint = npdet0.shape
+    assert(ndet == 1)
+    bitdet0 = np.unpackbits(npdet0.view('uint8'),bitorder='little').reshape(ndet,nspin,-1)
+    assert(bitdet0[0,0,iflip] == 1)
+    assert(bitdet0[0,1,iflip] == 0)
+    bitdet1 = bitdet0.copy()
+    bitdet1[0,0,iflip] = 0
+    bitdet1[0,1,iflip] = 1
+    npdet1 = np.packbits(bitdet1,bitorder='little').view('int64').reshape(ndet,nspin,nint)
+    qpdet1 = npdet1.tolist()
+    ezf.set_determinants_psi_det(qpdet1)
+    ezf.set_determinants_psi_det_qp_edit(qpdet1)
+    return
+    
+def set_s2_ezfio(ezpath,s2):
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    
+    ezf.set_determinants_expected_s2(s2)
+    return
 
+def get_fci_energy(ezpath):
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    
+    return ezf.get_fci_energy()
+
+def get_fci_energy_pt2(ezpath):
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    
+    return ezf.get_fci_energy_pt2()
+    
+    
 def gen_core_ormas_atom(mf,hsym,psym,spin_idx=0):
     from pyscf.symm.basis import _SO3_ID2SYMB
     orblist = [(i,occ,symid,_SO3_ID2SYMB[symid]) for i,(occ,symid) in enumerate(zip(mf.mo_occ,mf.orbsym))]
