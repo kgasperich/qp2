@@ -897,7 +897,8 @@ def make_tdm_sorted_bits_diag(psi1,psi2):
     tdm1 = np.zeros((2,norb,norb),dtype=float)
 
     # alpha singles
-    for ib1,b1 in enumerate(pd1.sorted_b_unique):
+    print('alpha singles')
+    for ib1,b1 in tqdm(enumerate(pd1.sorted_b_unique), total = pd1.n_beta_unique):
         ib2 = pd2.b_unique_map.get(b1,-1)
         if ib2<0:
             continue #b1 not in wf2
@@ -927,7 +928,8 @@ def make_tdm_sorted_bits_diag(psi1,psi2):
                     for i_b in np.argwhere(b_bits.ravel()):
                         tdm1[1,i_b,i_b] += c1[0][pd1.bilinear_order[itot1]] * c2[0][pd2.bilinear_order[itot2]]
     # beta singles
-    for ia1,a1 in enumerate(pd1.sorted_a_unique):
+    print('beta singles')
+    for ia1,a1 in tqdm(enumerate(pd1.sorted_a_unique), total = pd1.n_alpha_unique):
         ia2 = pd2.a_unique_map.get(a1,-1)
         if ia2<0:
             continue #a1 not in wf2
@@ -1313,10 +1315,10 @@ def gen_core_ormas_atom(mf,hsym,psym,spin_idx=0):
     nelec = mf.mol.nelec
     nelec_tot = sum(nelec)
 
-    ormas_nspace = 2
-    ormas_min_e = (0, nelec_tot - 1)
-    ormas_max_e = (1, nelec_tot)
-    ormas_mstart = (1,2)
+    ormas_nspace = 3
+    ormas_min_e = (0, 0, 1)
+    ormas_max_e = (1, nelec_tot-1, nelec_tot)
+    ormas_mstart = (1,2,15)
     ormas_info = (ormas_nspace, ormas_min_e, ormas_max_e, ormas_mstart)
 
     return hplist, ormas_info
