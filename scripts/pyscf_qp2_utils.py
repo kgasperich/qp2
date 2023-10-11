@@ -1315,10 +1315,14 @@ def gen_core_ormas_atom(mf,hsym,psym,spin_idx=0):
     nelec = mf.mol.nelec
     nelec_tot = sum(nelec)
 
-    ormas_nspace = 3
-    ormas_min_e = (0, 0, 1)
-    ormas_max_e = (1, nelec_tot-1, nelec_tot)
-    ormas_mstart = (1,2,15)
+    #ormas_nspace = 3
+    #ormas_min_e = (0, 0, 1)
+    #ormas_max_e = (1, nelec_tot-1, nelec_tot)
+    #ormas_mstart = (1,2,15)
+    ormas_nspace = 4
+    ormas_min_e = (0, 0, 1,0)
+    ormas_max_e = (1, nelec_tot-1, 2, nelec_tot)
+    ormas_mstart = (1,2,part_idx+1,part_idx+2)
     ormas_info = (ormas_nspace, ormas_min_e, ormas_max_e, ormas_mstart)
 
     return hplist, ormas_info
