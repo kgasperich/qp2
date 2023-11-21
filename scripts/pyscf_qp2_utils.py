@@ -10,6 +10,7 @@ from collections import Counter, defaultdict
 import os
 import re
 from tqdm import tqdm
+import shutil
 
 
 @functools.lru_cache()
@@ -1278,6 +1279,42 @@ def flip_spin_ezfio(ezpath,iflip):
     ezf.set_determinants_psi_det_qp_edit(qpdet1)
     return
     
+def flip_n_spin_ezfio(ezpath,nflip):
+    """
+    flip multiple orbs from single-alpha to single-beta
+    """
+    if nflip==0:
+        return
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    
+    na = ezf.get_electrons_elec_alpha_num()
+    nb = ezf.get_electrons_elec_beta_num()
+    
+    ezf.set_electrons_elec_alpha_num(na-nflip)
+    ezf.set_electrons_elec_beta_num(nb+nflip)
+    
+    qpdet0 = ezf.get_determinants_psi_det()
+    npdet0 = np.array(qpdet0,dtype=np.int64)
+    ndet, nspin, nint = npdet0.shape
+    assert(ndet == 1)
+    bitdet = np.unpackbits(npdet0.view('uint8'),bitorder='little').reshape(ndet,nspin,-1)
+    flipcount = 0
+    for iorb in range(bitdet.shape[2]):
+        if bitdet[0,0,iorb] == 1 and bitdet[0,1,iorb] == 0:
+            bitdet[0,0,iorb] = 0
+            bitdet[0,1,iorb] = 1
+            flipcount += 1
+            if flipcount >= nflip:
+                break
+
+    assert(flipcount == nflip)
+    npdet1 = np.packbits(bitdet,bitorder='little').view('int64').reshape(ndet,nspin,nint)
+    qpdet1 = npdet1.tolist()
+    ezf.set_determinants_psi_det(qpdet1)
+    ezf.set_determinants_psi_det_qp_edit(qpdet1)
+    return
+    
 def set_s2_ezfio(ezpath,s2):
     ezf = ezfio_obj()
     ezf.set_file(ezpath)
@@ -1337,4 +1374,9 @@ def save_ground_ezfio(mf,ezpath,n_det_max=10000):
     save_1det_to_ezfio(mf,ezpath,n_det_max=n_det_max)
     return
 
+def move_ezfio(ez0,ez1):
+    return shutil.move(ez0,ez1)
+
+def copy_ezfio(ez0,ez1):
+    return shutil.copytree(ez0,ez1)
 
