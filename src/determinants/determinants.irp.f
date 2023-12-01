@@ -543,6 +543,9 @@ subroutine save_wavefunction_general(ndet,nstates,psidet,dim_psicoef,psicoef)
   integer                        :: i,j,k, ndet_qp_edit
 
   if (mpi_master) then
+    if (backup_determinants_dir) then
+      call system('$QP_ROOT/scripts/save_current_dets.sh '//trim(ezfio_filename))
+    endif
     ndet_qp_edit = min(ndet,N_det_qp_edit)
 
     call ezfio_set_determinants_N_int(N_int)
