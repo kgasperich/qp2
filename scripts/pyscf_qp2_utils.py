@@ -11,6 +11,95 @@ import os
 import re
 from tqdm import tqdm
 import shutil
+import gzip
+import tarfile
+
+OCC2CHAR = {(0,0):'0',(1,0):'a',(0,1):'b',(1,1):'2'}
+
+def gz2np(fname, dtype=float):
+    """
+    load ezfio array as np array
+    needs to load entire array as a flat list first, then create np array from that list
+    """
+    with gzip.open(fname) as f:
+        ndim = int(f.readline().decode().strip())
+        dims = list(map(int,f.readline().decode().strip().split()))
+        flatdata = np.array(list(map(lambda x:dtype(x.decode().strip()),f.readlines())),dtype=dtype)
+    return flatdata.reshape(list(reversed(dims))).transpose(list(reversed(range(ndim))))
+#    return ndim,dims,flatdata
+
+def gz2np2(fname, dtype=float):
+    """
+    load ezfio array as np array
+    iterates over values, so might have less overhead than gz2np
+    """
+    with gzip.open(fname) as f:
+        ndim = int(f.readline().decode().strip())
+        dims = list(map(int,f.readline().decode().strip().split()))
+        nelements = np.product(dims)
+        flatdata = np.fromiter(map(lambda x:dtype(x.decode().strip()),f.readlines()),count=nelements,dtype=dtype)
+    return flatdata.reshape(list(reversed(dims))).transpose(list(reversed(range(ndim))))
+#    return ndim,dims,flatdata
+
+
+def gzobj2np2(f, dtype=float):
+    """
+    load ezfio array as np array
+    iterates over values, so might have less overhead than gz2np
+    """
+    #with gzip.open(fname) as f:
+    ndim = int(f.readline().decode().strip())
+    dims = list(map(int,f.readline().decode().strip().split()))
+    nelements = np.product(dims)
+    flatdata = np.fromiter(map(lambda x:dtype(x.decode().strip()),f.readlines()),count=nelements,dtype=dtype)
+    return flatdata.reshape(list(reversed(dims))).transpose(list(reversed(range(ndim))))
+#    return ndim,dims,flatdata
+
+def bytes2np(bstr, dtype=float):
+    blines = bstr.strip().split(b'\n')
+    ndim = int(blines[0].decode().strip())
+    dims = list(map(int,blines[1].decode().strip().split()))
+    flatdata = np.array(list(map(lambda x:dtype(x.decode().strip()),blines[2:])),dtype=dtype)
+    return flatdata.reshape(list(reversed(dims))).transpose(list(reversed(range(ndim))))
+
+def bytes2np2(bstr, dtype=float):
+    blines = bstr.strip().split(b'\n')
+    ndim = int(blines[0].decode().strip())
+    dims = list(map(int,blines[1].decode().strip().split()))
+    nelements = np.product(dims)
+    flatdata = np.fromiter(map(lambda x:dtype(x.decode().strip()),blines[2:]),count=nelements,dtype=dtype)
+    return flatdata.reshape(list(reversed(dims))).transpose(list(reversed(range(ndim))))
+
+def str2np(s, dtype=float):
+    lines = s.strip().split('\n')
+    ndim = int(lines[0].strip())
+    dims = list(map(int,lines[1].strip().split()))
+    flatdata = np.array(list(map(lambda x:dtype(x.strip()),lines[2:])),dtype=dtype)
+    return flatdata.reshape(list(reversed(dims))).transpose(list(reversed(range(ndim))))
+
+def popcount(i):
+    return bin(i).count('1')
+
+def intto01str(i):
+    return bin(i)[2:].rjust(64,'0')
+
+def detto01(i):
+    s = ''
+    for ii in i:
+        istr = intto01str(ii)
+        s = istr+s
+    return list(map(int,reversed(s)))
+
+def detabto01(ab):
+    return list(map(detto01,ab))
+
+def u64int(i):
+    i = int(i)
+    return np.uint64(i if i >= 0 else 2**64 + i)
+
+
+def psidet_uint(psidet):
+    return [[[u64int(i) for i in j] for j in k] for k in psidet]
 
 
 @functools.lru_cache()
@@ -366,7 +455,7 @@ def pyint_to_u64(i,n64):
     return np.frombuffer(b,dtype='uint64')
 
 def make_u64_psidet(inp):
-   if isinstance(inp, np.ndarray) and x.dtype in [np.uint64, np.int64]:
+   if isinstance(inp, np.ndarray) and inp.dtype in [np.uint64, np.int64]:
        # if already a np array, no work to do
        return inp.view('uint64').copy()
    else:
@@ -407,10 +496,40 @@ class PsiDet:
     def __init__(self,inp,norb=None):
         self.psidet_u64 = inp
         self.ndet, self.nspin, self.n64 = self._psidet_u64.shape
+        self.nelec = PsiDet.u64_to_bits(self._psidet_u64[0]).sum(axis=1)
         if norb:
             self.norb = norb
         else:
             self.norb = np.argwhere(self.to_bits().reshape(-1,self.n64*64).sum(axis=0)>0).max()+1
+
+    @staticmethod
+    def get_hp_ab_bits(d0,d1):
+        d0b, d1b = map(PsiDet.u64_to_bits,(d0,d1))
+        holes = np.logical_and(d0b,np.logical_not(d1b)).astype('uint8')
+        parts = np.logical_and(d1b,np.logical_not(d0b)).astype('uint8')
+        return (holes,parts)
+
+    @staticmethod
+    def get_hp_ab_occ(d0,d1):
+        holes,parts = PsiDet.get_hp_ab_bits(d0,d1)
+        return tuple(map(PsiDet.bits_to_occ,(holes,parts)))
+
+    @staticmethod
+    def bits_to_occ(bdet):
+        return [tuple(np.argwhere(sdet).ravel()) for sdet in bdet]
+
+    @staticmethod
+    def u64_to_bits(u64det):
+        nspin = u64det.shape[0]
+        return np.unpackbits(u64det.view('uint8'),bitorder='little').reshape(nspin,-1)
+
+    @staticmethod
+    def u64_to_occ(u64det):
+        return PsiDet.bits_to_occ(PsiDet.u64_to_bits(u64det))
+
+    @property
+    def hf_det(self):
+        return get_hfdet(self.norb,self.nelec)[0]
 
     @property
     def psidet_u64(self):
@@ -438,6 +557,12 @@ class PsiDet:
     def unique_beta(self):
         # return set([tuple(i) for i in self._psidet_u64[:,1,:]])
         return sorted(set([tuple(i) for i in self._psidet_u64[:,1,:]]), key=lambda x: tuple(reversed(x)))
+
+    def to_occ(self):
+        return [[tuple(np.argwhere(sdet).ravel()) for sdet in det] for det in self.to_bits()]
+
+    def to_string(self):
+        return [''.join([OCC2CHAR[da_i,db_i] for da_i,db_i in zip(*det)]) for det in self.to_bits()]
     
     def make_bilinear(self):
         self.ndet = len(self.psidet_u64)
@@ -560,10 +685,6 @@ def long_int_to_uint64(i):
     return res
 
 
-def u64int(i):
-    i = int(i)
-    return np.uint64(i if i >= 0 else 2**64 + i)
-
 def int_to_qpdet(sdet, nint):
     return [(np.int64(np.uint64((sdet >> (64*i)) % (1<<64)))) for i in range(nint)]
 
@@ -644,6 +765,50 @@ def get_psi(ezpath):
     d1 = PsiDet(d0,norb=norb)
 
     return c0,d1
+
+def get_psi_saved_all(ezpath):
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    rx=r"determinants\.(?P<nstate>\d+)\.0*(?P<ndet>\d+)\.tar"
+    tarmatch = [re.match(rx,i) for i in os.listdir(os.path.join(ezpath,'save','determinants')) if re.match(rx,i)]
+    tardict = {i.string : (int(i['nstate']),int(i['ndet'])) for i in tarmatch}
+    print(tarmatch)
+    return tardict
+
+def get_psi_saved(ezpath,ndet,nstate=1):
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    norb = ezf.get_mo_basis_mo_num() # assume this hasn't changed since dets were saved
+    savedetpath = os.path.join(ezpath,'save','determinants')
+    rx=fr"determinants\.{nstate}\.0*{ndet}\.tar"
+    tarmatch = [i for i in os.listdir(savedetpath) if re.match(rx,i)]
+    assert(len(tarmatch)==1)
+    with tarfile.open(os.path.join(savedetpath,tarmatch[0]),'r') as ftar:
+        with ftar.extractfile('determinants/psi_det.gz') as fdets:
+            with gzip.GzipFile(fileobj=fdets) as gdets:
+                psidet = gzobj2np2(gdets,dtype=np.uint64).transpose()
+        with ftar.extractfile('determinants/psi_coef.gz') as fcoef:
+            with gzip.GzipFile(fileobj=fcoef) as gcoef:
+                psicoef = gzobj2np2(gcoef,dtype=np.float64).transpose()
+
+    return (psicoef,PsiDet(psidet,norb=norb))
+
+
+    #c0 = ezf.get_determinants_psi_coef()
+    #d0 = ezf.get_determinants_psi_det()
+    #norb = ezf.get_mo_basis_mo_num()
+    #d1 = PsiDet(d0,norb=norb)
+
+def get_psi_all(ezpath):
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+
+    c0 = ezf.get_determinants_psi_coef()
+    d0 = ezf.get_determinants_psi_det()
+    norb = ezf.get_mo_basis_mo_num()
+    d1 = PsiDet(d0,norb=norb)
+
+    return (c0,d1)
 
 def get_hpmask_u64(d1,d2):
     """
@@ -993,6 +1158,10 @@ def load_mf(chkpath):
     mf.mo_energy = libchk.load(chkpath, "scf/mo_energy")
     mf.e_tot = libchk.load(chkpath, "scf/e_tot")
     return mf
+
+def get_orbsym(chkpath):
+    mf = load_mf(chkpath)
+    return mf.orbsym
 
 def guess_detsym(detab, orbsym):
     strsa, strsb = detab
