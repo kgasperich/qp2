@@ -231,6 +231,161 @@ END_PROVIDER
 
 END_PROVIDER
 
+ BEGIN_PROVIDER [ double precision, one_e_tdm_mo_alpha, (mo_num,mo_num,nstate_pairs) ]
+&BEGIN_PROVIDER [ double precision, one_e_tdm_mo_beta,  (mo_num,mo_num,nstate_pairs) ]
+  implicit none
+  BEGIN_DOC
+  ! $\alpha$ and $\beta$ one-body density matrix for each state
+  END_DOC
+
+  integer                        :: i,j,k,l,m,k_a,k_b,m_i,m_j
+  integer                        :: occ(N_int*bit_kind_size,2)
+  double precision               :: ck, cl, ckl
+  double precision               :: phase
+  integer                        :: h1,h2,p1,p2,s1,s2, degree
+  integer(bit_kind)              :: tmp_det(N_int,2), tmp_det2(N_int)
+  integer                        :: exc(0:2,2),n_occ(2)
+  double precision, allocatable  :: tmp_a(:,:,:), tmp_b(:,:,:)
+  integer                        :: krow, kcol, lrow, lcol
+  PROVIDE psi_det
+  PROVIDE N_states
+
+  one_e_tdm_mo_alpha = 0.d0
+  one_e_tdm_mo_beta  = 0.d0
+  !$OMP PARALLEL DEFAULT(NONE)                                      &
+      !$OMP PRIVATE(j,k,k_a,k_b,l,m,occ,ck, cl, ckl,phase,h1,h2,p1,p2,s1,s2, degree,exc,&
+      !$OMP  tmp_a, tmp_b, n_occ, krow, kcol, lrow, lcol, tmp_det, tmp_det2,m_i,m_j)&
+      !$OMP SHARED(psi_det,psi_coef,N_int,N_states,elec_alpha_num,  &
+      !$OMP  elec_beta_num,one_e_tdm_mo_alpha,one_e_tdm_mo_beta,N_det,&
+      !$OMP  mo_num,psi_bilinear_matrix_rows,psi_bilinear_matrix_columns,&
+      !$OMP  psi_bilinear_matrix_transp_rows, psi_bilinear_matrix_transp_columns,&
+      !$OMP  psi_bilinear_matrix_order_reverse, psi_det_alpha_unique, psi_det_beta_unique,&
+      !$OMP  psi_bilinear_matrix_values, psi_bilinear_matrix_transp_values,&
+      !$OMP  N_det_alpha_unique,N_det_beta_unique,irp_here,state_pair_idx,nstate_pairs)
+  allocate(tmp_a(mo_num,mo_num,nstate_pairs), tmp_b(mo_num,mo_num,nstate_pairs) )
+  tmp_a = 0.d0
+  !$OMP DO SCHEDULE(dynamic,64)
+  do k_a=1,N_det
+    krow = psi_bilinear_matrix_rows(k_a)
+    ASSERT (krow <= N_det_alpha_unique)
+
+    kcol = psi_bilinear_matrix_columns(k_a)
+    ASSERT (kcol <= N_det_beta_unique)
+
+    tmp_det(1:N_int,1) = psi_det_alpha_unique(1:N_int,krow)
+    tmp_det(1:N_int,2) = psi_det_beta_unique (1:N_int,kcol)
+
+    ! Diagonal part
+    ! -------------
+
+    call bitstring_to_list_ab(tmp_det, occ, n_occ, N_int)
+    do m=1,nstate_pairs
+      m_i = state_pair_idx(1,m)
+      m_j = state_pair_idx(2,m)
+      ck = psi_bilinear_matrix_values(k_a,m_i)*psi_bilinear_matrix_values(k_a,m_j)
+      do l=1,elec_alpha_num
+        j = occ(l,1)
+        tmp_a(j,j,m) += ck
+      enddo
+    enddo
+
+    if (k_a == N_det) cycle
+    l = k_a+1
+    lrow = psi_bilinear_matrix_rows(l)
+    lcol = psi_bilinear_matrix_columns(l)
+    ! Fix beta determinant, loop over alphas
+    do while ( lcol == kcol )
+      tmp_det2(:) = psi_det_alpha_unique(:, lrow)
+      call get_excitation_degree_spin(tmp_det(1,1),tmp_det2,degree,N_int)
+      if (degree == 1) then
+        exc = 0
+        call get_single_excitation_spin(tmp_det(1,1),tmp_det2,exc,phase,N_int)
+        call decode_exc_spin(exc,h1,p1,h2,p2)
+        do m=1,nstate_pairs
+          m_i = state_pair_idx(1,m)
+          m_j = state_pair_idx(2,m)
+          ckl = psi_bilinear_matrix_values(k_a,m_i)*psi_bilinear_matrix_values(l,m_j) * phase
+          tmp_a(h1,p1,m) += ckl
+          !tmp_a(p1,h1,m) += ckl
+        enddo
+      endif
+      l = l+1
+      if (l>N_det) exit
+      lrow = psi_bilinear_matrix_rows(l)
+      lcol = psi_bilinear_matrix_columns(l)
+    enddo
+
+  enddo
+  !$OMP END DO NOWAIT
+
+  !$OMP CRITICAL
+  one_e_tdm_mo_alpha(:,:,:) = one_e_tdm_mo_alpha(:,:,:) + tmp_a(:,:,:)
+  !$OMP END CRITICAL
+  deallocate(tmp_a)
+
+  tmp_b = 0.d0
+  !$OMP DO SCHEDULE(dynamic,64)
+  do k_b=1,N_det
+    krow = psi_bilinear_matrix_transp_rows(k_b)
+    ASSERT (krow <= N_det_alpha_unique)
+
+    kcol = psi_bilinear_matrix_transp_columns(k_b)
+    ASSERT (kcol <= N_det_beta_unique)
+
+    tmp_det(1:N_int,1) = psi_det_alpha_unique(1:N_int,krow)
+    tmp_det(1:N_int,2) = psi_det_beta_unique (1:N_int,kcol)
+
+    ! Diagonal part
+    ! -------------
+
+    call bitstring_to_list_ab(tmp_det, occ, n_occ, N_int)
+    do m=1,nstate_pairs
+      m_i = state_pair_idx(1,m)
+      m_j = state_pair_idx(2,m)
+      ck = psi_bilinear_matrix_transp_values(k_b,m_i)*psi_bilinear_matrix_transp_values(k_b,m_j)
+      do l=1,elec_beta_num
+        j = occ(l,2)
+        tmp_b(j,j,m) += ck
+      enddo
+    enddo
+
+    if (k_b == N_det) cycle
+    l = k_b+1
+    lrow = psi_bilinear_matrix_transp_rows(l)
+    lcol = psi_bilinear_matrix_transp_columns(l)
+    ! Fix beta determinant, loop over alphas
+    do while ( lrow == krow )
+      tmp_det2(:) = psi_det_beta_unique(:, lcol)
+      call get_excitation_degree_spin(tmp_det(1,2),tmp_det2,degree,N_int)
+      if (degree == 1) then
+        exc = 0
+        call get_single_excitation_spin(tmp_det(1,2),tmp_det2,exc,phase,N_int)
+        call decode_exc_spin(exc,h1,p1,h2,p2)
+        do m=1,nstate_pairs
+          m_i = state_pair_idx(1,m)
+          m_j = state_pair_idx(2,m)
+          ckl = psi_bilinear_matrix_transp_values(k_b,m_i)*psi_bilinear_matrix_transp_values(l,m_j) * phase
+          tmp_b(h1,p1,m) += ckl
+          !tmp_b(p1,h1,m) += ckl
+        enddo
+      endif
+      l = l+1
+      if (l>N_det) exit
+      lrow = psi_bilinear_matrix_transp_rows(l)
+      lcol = psi_bilinear_matrix_transp_columns(l)
+    enddo
+
+  enddo
+  !$OMP END DO NOWAIT
+  !$OMP CRITICAL
+  one_e_tdm_mo_beta(:,:,:)  = one_e_tdm_mo_beta(:,:,:)  + tmp_b(:,:,:)
+  !$OMP END CRITICAL
+
+  deallocate(tmp_b)
+  !$OMP END PARALLEL
+
+END_PROVIDER
+
 BEGIN_PROVIDER [ double precision, one_e_dm_mo, (mo_num,mo_num) ]
    implicit none
    BEGIN_DOC
@@ -450,6 +605,56 @@ END_PROVIDER
        enddo
      enddo
    enddo
+
+END_PROVIDER
+
+ BEGIN_PROVIDER [ double precision, one_e_tdm_ao_alpha, (ao_num,ao_num,nstate_pairs) ]
+&BEGIN_PROVIDER [ double precision, one_e_tdm_ao_beta, (ao_num,ao_num,nstate_pairs) ]
+  BEGIN_DOC
+  ! One body density matrix on the |AO| basis : $\rho_{AO}(\alpha), \rho_{AO}(\beta)$.
+  END_DOC
+  implicit none
+  integer                        :: i,j,u,v,m
+  double precision, allocatable  :: tmp_a(:,:,:), tmp_b(:,:,:)
+
+  allocate(tmp_a(ao_num,mo_num,nstate_pairs),tmp_b(ao_num,mo_num,nstate_pairs))
+  one_e_tdm_ao_alpha = 0.d0
+  one_e_tdm_ao_beta = 0.d0
+  tmp_a = 0.d0
+  tmp_b = 0.d0
+  do m = 1, nstate_pairs
+    do j = 1, mo_num
+      do i = 1, mo_num
+        do u = 1, ao_num
+          tmp_a(u,j,m) += mo_coef(u,i) * one_e_tdm_mo_alpha(i,j,m)
+          tmp_b(u,j,m) += mo_coef(u,i) * one_e_tdm_mo_beta(i,j,m)
+        enddo
+      enddo
+    enddo
+  enddo
+  do m = 1, nstate_pairs
+    do j = 1, mo_num
+      do v = 1, ao_num
+        do u = 1, ao_num
+          one_e_tdm_ao_alpha(u,v,m) += mo_coef(v,j) * tmp_a(u,j,m)
+          one_e_tdm_ao_beta(u,v,m)  += mo_coef(v,j) * tmp_b(u,j,m)
+        enddo
+      enddo
+    enddo
+  enddo
+  deallocate(tmp_a,tmp_b)
+!   do m = 1, nstate_pairs
+!     do j = 1, mo_num
+!       do u = 1, ao_num
+!         do v = 1, ao_num
+!           do i = 1, mo_num
+!             one_e_tdm_ao_alpha(u,v,m) += mo_coef(u,i) * mo_coef(v,j) * one_e_tdm_mo_alpha(i,j,m)
+!             one_e_tdm_ao_beta(u,v,m) += mo_coef(u,i) * mo_coef(v,j)  * one_e_tdm_mo_beta(i,j,m) 
+!           enddo
+!         enddo
+!       enddo
+!     enddo
+!   enddo
 
 END_PROVIDER
 
