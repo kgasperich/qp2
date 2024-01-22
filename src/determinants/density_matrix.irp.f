@@ -240,7 +240,7 @@ END_PROVIDER
 
   integer                        :: i,j,k,l,m,k_a,k_b,m_i,m_j
   integer                        :: occ(N_int*bit_kind_size,2)
-  double precision               :: ck, cl, ckl
+  double precision               :: ck, cl, ckl, clk
   double precision               :: phase
   integer                        :: h1,h2,p1,p2,s1,s2, degree
   integer(bit_kind)              :: tmp_det(N_int,2), tmp_det2(N_int)
@@ -253,7 +253,7 @@ END_PROVIDER
   one_e_tdm_mo_alpha = 0.d0
   one_e_tdm_mo_beta  = 0.d0
   !$OMP PARALLEL DEFAULT(NONE)                                      &
-      !$OMP PRIVATE(j,k,k_a,k_b,l,m,occ,ck, cl, ckl,phase,h1,h2,p1,p2,s1,s2, degree,exc,&
+      !$OMP PRIVATE(j,k,k_a,k_b,l,m,occ,ck, cl, ckl,clk,phase,h1,h2,p1,p2,s1,s2, degree,exc,&
       !$OMP  tmp_a, tmp_b, n_occ, krow, kcol, lrow, lcol, tmp_det, tmp_det2,m_i,m_j)&
       !$OMP SHARED(psi_det,psi_coef,N_int,N_states,elec_alpha_num,  &
       !$OMP  elec_beta_num,one_e_tdm_mo_alpha,one_e_tdm_mo_beta,N_det,&
@@ -305,8 +305,9 @@ END_PROVIDER
           m_i = state_pair_idx(1,m)
           m_j = state_pair_idx(2,m)
           ckl = psi_bilinear_matrix_values(k_a,m_i)*psi_bilinear_matrix_values(l,m_j) * phase
+          clk = psi_bilinear_matrix_values(k_a,m_j)*psi_bilinear_matrix_values(l,m_i) * phase
           tmp_a(h1,p1,m) += ckl
-          !tmp_a(p1,h1,m) += ckl
+          tmp_a(p1,h1,m) += clk
         enddo
       endif
       l = l+1
@@ -365,8 +366,9 @@ END_PROVIDER
           m_i = state_pair_idx(1,m)
           m_j = state_pair_idx(2,m)
           ckl = psi_bilinear_matrix_transp_values(k_b,m_i)*psi_bilinear_matrix_transp_values(l,m_j) * phase
+          clk = psi_bilinear_matrix_transp_values(k_b,m_j)*psi_bilinear_matrix_transp_values(l,m_i) * phase
           tmp_b(h1,p1,m) += ckl
-          !tmp_b(p1,h1,m) += ckl
+          tmp_b(p1,h1,m) += clk
         enddo
       endif
       l = l+1

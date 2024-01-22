@@ -22,86 +22,89 @@ subroutine routine_append_states
   use bitmasks
   implicit none
   BEGIN_DOC
-  ! routine called by :c:func:`save_one_e_dm`
+  ! routine called by :c:func:`append_states`
   END_DOC
  
-  integer :: i,j,ndet_to_add,ndet_total,nstates_total,iint,istate
-  logical :: j_done
-  integer*8, external :: det_search_key
-  integer*8 :: i_key,j_key
+  integer :: i,j,ndet_to_add,ndet_total,nstates_total,iint,istate,ndet_new,nstates_new
+  logical, external :: is_in_wavefunction
+  integer, external :: get_index_in_psi_det_sorted_bit
 
   PROVIDE psi_det psi_coef
   PROVIDE data_psi_det_new data_psi_coef_new
  
-  double precision, allocatable :: psi_coef_sorted_new(:,:), psi_coef_total(:,:)
-  integer(bit_kind), allocatable :: psi_det_sorted_new(:,:,:), psi_det_total(:,:,:)
+  double precision, allocatable  :: coef_buf_existing(:,:), coef_buf_new(:,:), coef_buf_total(:,:)
+  integer(bit_kind), allocatable :: det_buf_new(:,:,:), det_buf_total(:,:,:)
 
-  ndet_total = N_det + data_n_det_new
+  ndet_new = data_n_det_new
+  nstates_new = data_n_states_new
   nstates_total = N_states + data_n_states_new
- 
-  allocate(psi_coef_sorted_new(data_n_det_new, data_n_states_new), psi_det_sorted_new(N_int,2,data_n_det_new))
 
-  allocate(psi_coef_total(ndet_total, nstates_total), psi_det_total(N_int,2,ndet_total))
- 
-  call sort_dets_by_det_search_key(data_n_det_new, data_psi_det_new, data_psi_coef_new, data_n_det_new, psi_det_sorted_new, psi_coef_sorted_new, data_n_states_new)
+  allocate(coef_buf_existing(N_det, nstates_new), &
+           coef_buf_new(ndet_new, nstates_new), &
+           det_buf_new(N_int, 2, ndet_new))
 
+  coef_buf_existing = 0.d0
+  coef_buf_new = 0.d0
 
-  j_done = .False.
-  j=1
-  j_key = det_search_key(psi_det_sorted_new(1,1,j),N_int)
-  ndet_to_add=0
-  do i=1,N_det
-    i_key = det_search_key(psi_det_sorted_bit(1,1,i),N_int)
-    do while ((j_key <= i_key).and.(j <= data_n_det_new))
+  ndet_to_add = 0
+
+  do j=1,ndet_new
+    if (is_in_wavefunction(data_psi_det_new(1,1,j),N_int)) then
+      i = get_index_in_psi_det_sorted_bit(data_psi_det_new(1,1,j),N_int)
+      do istate=1,nstates_new
+        coef_buf_existing(i, istate) = data_psi_coef_new(j, istate)
+      enddo
+    else
       ndet_to_add += 1
+      do istate=1,nstates_new
+        coef_buf_new(ndet_to_add, istate) = data_psi_coef_new(j, istate)
+      enddo
       do iint=1,N_int
-        psi_det_total(iint,1,ndet_to_add) = psi_det_sorted_new(iint,1,j)
-        psi_det_total(iint,2,ndet_to_add) = psi_det_sorted_new(iint,2,j)
+        det_buf_new(iint,1,ndet_to_add) = data_psi_det_new(iint,1,j)
+        det_buf_new(iint,2,ndet_to_add) = data_psi_det_new(iint,2,j)
       enddo
-      if (j_key == i_key) then
-        do istate=1,N_states
-          psi_coef_total(ndet_to_add,istate) = psi_coef_sorted_bit(i,istate)
-        enddo
-      else
-        do istate=1,N_states
-          psi_coef_total(ndet_to_add,istate) = 0.d0
-        enddo
-      endif
-      do istate=1,data_n_states_new
-        psi_coef_total(ndet_to_add,N_states+istate) = psi_coef_sorted_new(j,istate)
-      enddo
-      j += 1
-      if (j > data_n_det_new) exit
-      j_key = det_search_key(psi_det_sorted_new(1,1,j),N_int)
-    enddo
+    endif
+  enddo
 
-    ndet_to_add += 1
-    do iint=1,N_int
-      psi_det_total(iint,1,ndet_to_add) = psi_det_sorted_bit(iint,1,i)
-      psi_det_total(iint,2,ndet_to_add) = psi_det_sorted_bit(iint,2,i)
-    enddo
+  ndet_total = N_det + ndet_to_add
+
+  allocate(coef_buf_total(ndet_total, nstates_total), &
+           det_buf_total(N_int, 2, ndet_total))
+
+  coef_buf_total = 0.d0
+
+  do i=1,N_det
     do istate=1,N_states
-      psi_coef_total(ndet_to_add,istate) = psi_coef_sorted_bit(i,istate)
+      coef_buf_total(i,istate) = psi_coef_sorted_bit(i,istate)
     enddo
-    do istate=1,data_n_states_new
-      psi_coef_total(ndet_to_add,N_states+istate) = 0.d0
+    do istate=1,nstates_new
+      coef_buf_total(i,istate + N_states) = coef_buf_existing(i, istate)
+    enddo
+    do iint=1,N_int
+      det_buf_total(iint,1,i) = psi_det_sorted_bit(iint,1,i)
+      det_buf_total(iint,2,i) = psi_det_sorted_bit(iint,2,i)
+    enddo
+  enddo
+  do i=1,ndet_to_add
+    j=N_det + i
+    do istate=1,N_states
+      coef_buf_total(j,istate) = 0.d0
+    enddo
+    do istate=1,nstates_new
+      coef_buf_total(j,istate + N_states) = coef_buf_new(i, istate)
+    enddo
+    do iint=1,N_int
+      det_buf_total(iint,1,j) = det_buf_new(iint,1,i)
+      det_buf_total(iint,2,j) = det_buf_new(iint,2,i)
     enddo
   enddo
 
-  do while (j <= data_n_det_new)
-    ndet_to_add += 1
-    do iint=1,N_int
-      psi_det_total(iint,1,ndet_to_add) = psi_det_sorted_bit(iint,1,j)
-      psi_det_total(iint,2,ndet_to_add) = psi_det_sorted_bit(iint,2,j)
-    enddo
-    do istate=1,N_states
-      psi_coef_total(ndet_to_add,istate) = 0.d0
-    enddo
-    do istate=1,data_n_states_new
-      psi_coef_total(ndet_to_add,N_states+istate) = psi_coef_sorted_new(j,istate)
-    enddo
-    j += 1
-  enddo
+  call save_wavefunction_general(ndet_total, nstates_total, det_buf_total,ndet_total,coef_buf_total)
 
-  call save_wavefunction_general(ndet_to_add, nstates_total, psi_det_total(:,:,:ndet_to_add),ndet_total,psi_coef_total) 
+  deallocate(coef_buf_existing, &
+             coef_buf_new, &
+             det_buf_new, &
+             coef_buf_total, &
+             det_buf_total)
+
 end
