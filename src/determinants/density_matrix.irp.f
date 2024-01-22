@@ -231,6 +231,98 @@ END_PROVIDER
 
 END_PROVIDER
 
+BEGIN_PROVIDER [ integer, nstate_pairs ]
+  implicit none
+  BEGIN_DOC
+! number of pairs of states in the wave function
+  END_DOC
+
+  logical                        :: has
+  PROVIDE ezfio_filename
+  if (mpi_master) then
+    call ezfio_has_determinants_nstate_pairs(has)
+    if (has) then
+      call ezfio_get_determinants_nstate_pairs(nstate_pairs)
+    else
+      print *, 'determinants/nstate_pairs not found in EZFIO file'
+      nstate_pairs = shiftr(N_states*N_states+N_states,1)
+      print *, 'nstate_pairs set to: ',nstate_pairs
+    endif
+  endif
+  IRP_IF MPI_DEBUG
+    print *,  irp_here, mpi_rank
+    call MPI_BARRIER(MPI_COMM_WORLD, ierr)
+  IRP_ENDIF
+  IRP_IF MPI
+    include 'mpif.h'
+    integer :: ierr
+    call MPI_BCAST( nstate_pairs, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
+    if (ierr /= MPI_SUCCESS) then
+      stop 'Unable to read nstate_pairs with MPI'
+    endif
+  IRP_ENDIF
+END_PROVIDER
+
+BEGIN_PROVIDER [ integer, nstate_pairs_unique ]
+  implicit none
+  BEGIN_DOC
+! number of unique pairs of states in the wave function
+  END_DOC
+
+  logical                        :: has
+  PROVIDE ezfio_filename
+  if (mpi_master) then
+    call ezfio_has_determinants_nstate_pairs_unique(has)
+    if (has) then
+      call ezfio_get_determinants_nstate_pairs_unique(nstate_pairs_unique)
+    else
+      print *, 'determinants/nstate_pairs_unique not found in EZFIO file'
+      nstate_pairs_unique = shiftr(N_states*N_states-N_states,1)
+      print *, 'nstate_pairs_unique set to: ',nstate_pairs_unique
+    endif
+  endif
+  IRP_IF MPI_DEBUG
+    print *,  irp_here, mpi_rank
+    call MPI_BARRIER(MPI_COMM_WORLD, ierr)
+  IRP_ENDIF
+  IRP_IF MPI
+    include 'mpif.h'
+    integer :: ierr
+    call MPI_BCAST( nstate_pairs_unique, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
+    if (ierr /= MPI_SUCCESS) then
+      stop 'Unable to read nstate_pairs_unique with MPI'
+    endif
+  IRP_ENDIF
+END_PROVIDER
+
+BEGIN_PROVIDER [ integer, state_pair_idx, (2,nstate_pairs) ]
+  implicit none
+  integer :: i,istate,jstate
+  i=1
+  ! upper triangle (including diagonal)
+  do jstate=1,N_states
+    do istate=1,jstate
+      state_pair_idx(1,i)=istate
+      state_pair_idx(2,i)=jstate
+      i=i+1
+    enddo
+  enddo
+END_PROVIDER
+
+BEGIN_PROVIDER [ integer, state_pair_idx_unique, (2,nstate_pairs_unique) ]
+  implicit none
+  integer :: i,istate,jstate
+  i=1
+  ! upper triangle (excluding diagonal)
+  do jstate=2,N_states
+    do istate=1,jstate-1
+      state_pair_idx_unique(1,i)=istate
+      state_pair_idx_unique(2,i)=jstate
+      i=i+1
+    enddo
+  enddo
+END_PROVIDER
+
  BEGIN_PROVIDER [ double precision, one_e_tdm_mo_alpha, (mo_num,mo_num,nstate_pairs) ]
 &BEGIN_PROVIDER [ double precision, one_e_tdm_mo_beta,  (mo_num,mo_num,nstate_pairs) ]
   implicit none

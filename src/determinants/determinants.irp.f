@@ -1,36 +1,5 @@
 use bitmasks
 
- BEGIN_PROVIDER [ integer, nstate_pairs ]
-&BEGIN_PROVIDER [ integer, nstate_pairs_unique ]
-  implicit none
-  nstate_pairs = shiftr(N_states*N_states+N_states,1)
-  nstate_pairs_unique = nstate_pairs - N_states
-END_PROVIDER
-
- BEGIN_PROVIDER [ integer, state_pair_idx, (2,nstate_pairs) ]
-&BEGIN_PROVIDER [ integer, state_pair_idx_unique, (2,nstate_pairs_unique) ]
-  implicit none
-  
-  integer :: i,istate,jstate
-  i=1
-  ! upper triangle (including diagonal)
-  do jstate=1,N_states
-    do istate=1,jstate
-      state_pair_idx(1,i)=istate
-      state_pair_idx(2,i)=jstate
-      i=i+1
-    enddo
-  enddo
-  i=1
-  ! upper triangle (excluding diagonal)
-  do jstate=2,N_states
-    do istate=1,jstate-1
-      state_pair_idx_unique(1,i)=istate
-      state_pair_idx_unique(2,i)=jstate
-      i=i+1
-    enddo
-  enddo
-END_PROVIDER
 
 
 BEGIN_PROVIDER [ integer, N_det ]
