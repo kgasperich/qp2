@@ -23,6 +23,7 @@ subroutine routine_save_one_e_tdm
  BEGIN_DOC
  ! routine called by :c:func:`save_one_e_tdm`
  END_DOC
+ call ezfio_set_aux_quantities_data_nstate_pairs(nstate_pairs)
  call ezfio_set_aux_quantities_data_one_e_tdm_alpha_mo(one_e_tdm_mo_alpha)
  call ezfio_set_aux_quantities_data_one_e_tdm_beta_mo(one_e_tdm_mo_beta)
  call ezfio_set_aux_quantities_data_one_e_tdm_alpha_ao(one_e_tdm_ao_alpha)
