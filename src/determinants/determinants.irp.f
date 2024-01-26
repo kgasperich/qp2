@@ -1,7 +1,5 @@
 use bitmasks
 
-
-
 BEGIN_PROVIDER [ integer, N_det ]
   implicit none
   BEGIN_DOC
