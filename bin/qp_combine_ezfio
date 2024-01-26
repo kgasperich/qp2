@@ -1,0 +1,107 @@
+#!/bin/bash
+
+# Check the QP_ROOT directory
+if [[ -z ${QP_ROOT} ]] ; then
+  >&2 echo "please source quantum_package.rc"
+  exit 1
+fi
+
+source ${QP_ROOT}/quantum_package.rc
+
+TEMP=$(getopt -o h -l ,help -n $0 -- "$@") || exit 1 # get the input / options 
+eval set -- "$TEMP"
+
+function help(){
+     cat <<EOF
+
+ Merge the wavefunctions from two ezfio directories
+ 
+ Usage:
+   $(basename $0)  EZFIO_TO_ALTER EZFIO_TO_ADD
+ 
+ Behavior: 
+ 
+      Modifies EZFIO_TO_ALTER by adding as many new states are are present in EZFIO_TO_ADD
+        *  does not check to make sure that the MO basis is equivalent in both files
+
+ Options:
+   -h, --help                            Print the HELP message
+ 
+ Example: ground state calculation on the EZFIO h2o.ezfio 
+
+          $(basename $0) Ne_ground.ezfio Ne_1s-3pz.ezfio
+
+          adds any states in Ne_1s-3pz.ezfio to Ne_ground.ezfio 
+ 
+ 
+EOF
+     exit
+}
+
+ while true ; do
+     case "$1" in
+         -h|-help|--help)
+             help
+             exit 0;;
+         --) shift  ; break ;;
+     "") help ; break ;;
+     esac
+ done
+
+ezfio1=${1%/} # take off the / at the end
+ezfio2=${2%/} # take off the / at the end
+
+#if [[ ! -z ${EZFIO_FILE}   ]] ; then
+# file=${EZFIO_FILE}
+#else 
+# file=$ezfio
+#fi
+ 
+file1=$ezfio1
+file2=$ezfio2
+
+echo "file1: ${file1}"
+echo "file2: ${file2}"
+
+if [[ -z ${file1} ]] ; then
+ >&2 echo "You did not specify an EZFIO directory to modify. "
+ exit 1
+fi
+
+if [[ -z ${file2} ]] ; then
+ >&2 echo "You did not specify an EZFIO directory to append. "
+ exit 1
+fi
+
+if [[ -d ${file1}/aux_quantities ]] ; then
+  echo "${file1}/aux_quantities already exists"
+else
+  echo "${file1}/aux_quantities does not exist; creating"
+  mkdir ${file1}/aux_quantities
+fi
+
+for f in psi_coef psi_det n_states n_det
+do
+
+  case $f in 
+    "psi"*)
+      fext=.gz
+      ;;
+
+    "n"*)
+      fext=
+      ;;
+
+    *)
+      >&2 echo "unrecognized file ${f}"
+      exit 1
+      ;;
+  esac
+
+  cp ${file2}/determinants/${f}${fext} ${file1}/aux_quantities/data_${f}_new${fext}
+done
+
+qp_run append_states $file1
+#nstates=`cat ${file1}/determinants/n_states`
+#echo "nstates: $nstates"
+
