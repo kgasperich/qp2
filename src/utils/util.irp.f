@@ -639,4 +639,50 @@ end subroutine diagonalize_sym_matrix
 ! ---
 
 
+subroutine simplify_label_list(n, labels)
+  implicit none
+  BEGIN_DOC
+  ! Input labels is a list of n integers which are not necessarily distinct.
+  ! Upon return, labels will be mapped from the initial values onto the integers (1,2,...,m)
+  ! where m is the number of distinct values in the input.
+  !
+  ! If we have multiple active spaces and MO symmetries and we want a single label
+  ! for each unique pair of (active_space_idx, symm_idx), we can do something like:
+  ! combined_idx(i) = active_space_idx(i) + symm_idx(i) * num_active_spaces
+  !
+  ! If this leaves gaps between values, it might be awkward to work with in some cases.
+  ! This function maintains the same groups of shared labels, but the resulting labels
+  ! are contiguous starting from 1.
+  END_DOC
+
+  integer, intent(in)    :: n
+  integer, intent(inout) :: labels(n)
+
+  integer, allocatable   :: tmp(:), unique(:)
+  integer                :: i, vmax, vmin, nunique
+
+
+  allocate(tmp(n),unique(n))
+
+  do i=1,n
+    tmp(i)=labels(i)
+  enddo
   
+  nunique = 0
+
+  vmax = maxval(tmp)
+  vmin = minval(tmp)-1
+  ! get each unique value in labels and associate it with 1,2,...,nunique
+  do while (vmin<vmax)
+    nunique = nunique+1
+    vmin = minval(tmp, mask=tmp>vmin)
+    unique(nunique) = vmin
+  enddo
+
+  ! change initial values to 1,2,...,nunique
+  do i=1,nunique
+    where(tmp==unique(i)) labels = i
+  enddo
+  deallocate(tmp,unique)
+
+end subroutine simplify_label_list
