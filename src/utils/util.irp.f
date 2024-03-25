@@ -653,6 +653,11 @@ subroutine simplify_label_list(n, labels)
   ! If this leaves gaps between values, it might be awkward to work with in some cases.
   ! This function maintains the same groups of shared labels, but the resulting labels
   ! are contiguous starting from 1.
+  !
+  ! example:
+  ! simplify_label_list(10,[14,5,99,5,99,14,14,12,8,5])
+  ! on output, labels will be [4,1,5,1,5,4,4,3,2,1]
+  !
   END_DOC
 
   integer, intent(in)    :: n

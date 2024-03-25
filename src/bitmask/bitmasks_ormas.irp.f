@@ -14,7 +14,9 @@ BEGIN_PROVIDER [integer, ormas_mstart, (ormas_n_space) ]
     if (has) then
 !      write(6,'(A)') '.. >>>>> [ IO READ: ormas_mstart ] <<<<< ..'
       call ezfio_get_bitmask_ormas_mstart(ormas_mstart)
-      ASSERT (ormas_mstart(1).eq.1)
+      if (ormas_mstart(1) .ne. 1) then
+        stop 'first ORMAS space must start at orbital 1'
+      endif
     else if (ormas_n_space.eq.1) then
       ormas_mstart = 1
     else
@@ -147,6 +149,25 @@ BEGIN_PROVIDER [ integer, ormas_list_orb, (ormas_max_n_orb, ormas_n_space) ]
     enddo
   enddo
 END_PROVIDER
+
+BEGIN_PROVIDER [ integer, ormas_space_idx, (mo_num) ]
+  implicit none
+  BEGIN_DOC
+  ! index of the ormas space of each MO
+  ! the first space can start after MO #1; in this case,
+  ! the MOs from #1 to the start of the first space
+  ! will be labeled as ormas_n_space+1
+  END_DOC
+  integer :: ispace, iorb
+
+  ormas_space_idx = ormas_n_space+1
+
+  do ispace = 1, ormas_n_space
+    do iorb = 1, ormas_n_orb(ispace)
+      ormas_space_idx(ormas_list_orb(iorb,ispace)) = ispace
+    enddo
+  enddo
+END_PROVIDER
   
 BEGIN_PROVIDER [ integer(bit_kind), ormas_bitmask, (N_int, ormas_n_space) ]
   implicit none
@@ -203,4 +224,4 @@ logical function det_allowed_ormas(key_in)
   enddo
   det_allowed_ormas = .True.
 end
-  
+

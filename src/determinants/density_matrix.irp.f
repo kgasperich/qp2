@@ -354,6 +354,65 @@ subroutine save_natural_mos
    call save_mos
 end
 
+subroutine save_natural_mos_block
+   implicit none
+   BEGIN_DOC
+   ! Save natural orbitals, obtained by diagonalization of the one-body density matrix in
+   ! the |MO| basis
+   END_DOC
+   integer :: i,j
+   call set_natural_mos_block
+   call nullify_small_elements(ao_num,mo_num,mo_coef,size(mo_coef,1),1.d-10)
+   print *,'debug initial NOs'
+   do i=1,ao_num
+     do j=1,mo_num
+       write(*, '(E25.15)', advance='no') mo_coef(i,j)
+     enddo
+     print *,''
+   enddo
+   call orthonormalize_mos
+   print *,'debug orthonormalized NOs'
+   do i=1,ao_num
+     do j=1,mo_num
+       write(*, '(E25.15)', advance='no') mo_coef(i,j)
+     enddo
+     print *,''
+   enddo
+
+   call save_mos
+end
+
+subroutine set_natural_mos_block
+   implicit none
+   BEGIN_DOC
+   ! Set natural orbitals, obtained by diagonalization of the one-body density matrix
+   ! in the |MO| basis
+   END_DOC
+   character*(64)                 :: label
+   double precision, allocatable  :: tmp(:,:)
+   integer                        :: orb_labels(mo_num)
+
+   label = "Natural"
+    integer :: i,j,iorb,jorb
+    do i = 1, n_virt_orb
+     iorb = list_virt(i)
+     do j = 1, n_core_inact_act_orb
+      jorb = list_core_inact_act(j)
+     enddo
+    enddo
+
+    orb_labels = mo_symmetry * (ormas_n_space+2)
+    if (do_ormas) then
+      orb_labels = orb_labels + ormas_space_idx
+    endif
+    print*,'debug MO labels'
+    do i=1,mo_num
+      write(*, '(2I5)') orb_labels(i)
+    enddo
+   call mo_as_svd_vectors_of_mo_matrix_eig_groups(one_e_dm_mo,size(one_e_dm_mo,1),mo_num,mo_num,mo_occ,label,orb_labels)
+   soft_touch mo_occ
+end
+
 
 BEGIN_PROVIDER [ double precision, c0_weight, (N_states) ]
    implicit none

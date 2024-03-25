@@ -252,6 +252,39 @@ BEGIN_PROVIDER [ double precision, mo_occ, (mo_num) ]
 END_PROVIDER
 
 
+BEGIN_PROVIDER [ integer, mo_symmetry, (mo_num) ]
+  implicit none
+  BEGIN_DOC
+  ! |MO| symmetry labels
+  ! placeholder until proper symmetry detection is implemented
+  END_DOC
+  logical                        :: exists
+  PROVIDE ezfio_filename
+  if (mpi_master) then
+    call ezfio_has_mo_basis_mo_symmetry(exists)
+    if (exists) then
+      call ezfio_get_mo_basis_mo_symmetry(mo_symmetry)
+    else
+      mo_symmetry=1
+    endif
+    write(*,*) 'Read mo_symmetry'
+  endif
+  IRP_IF MPI_DEBUG
+    print *,  irp_here, mpi_rank
+    call MPI_BARRIER(MPI_COMM_WORLD, ierr)
+  IRP_ENDIF
+  IRP_IF MPI
+    include 'mpif.h'
+    integer :: ierr
+    call MPI_BCAST( mo_symmetry, mo_num, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
+    if (ierr /= MPI_SUCCESS) then
+      stop 'Unable to read mo_symmetry with MPI'
+    endif
+  IRP_ENDIF
+
+END_PROVIDER
+
+
 subroutine ao_to_mo(A_ao,LDA_ao,A_mo,LDA_mo)
   implicit none
   BEGIN_DOC

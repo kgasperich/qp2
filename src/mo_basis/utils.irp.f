@@ -239,6 +239,113 @@ subroutine mo_as_svd_vectors_of_mo_matrix_eig(matrix,lda,m,n,eig,label)
 end
 
 
+subroutine mo_as_svd_vectors_of_mo_matrix_eig_groups(matrix,lda,m,n,eig,label,orb_labels)
+  implicit none
+  BEGIN_DOC
+! same as mo_as_svd_vectors_of_mo_matrix_eig, but only allow rotations among MOs with the same orb_label
+  END_DOC
+
+  integer,intent(in)             :: lda,m,n
+  character*(64), intent(in)     :: label
+  double precision, intent(in)   :: matrix(lda,n)
+  double precision, intent(out)  :: eig(m)
+  integer, intent(in)            :: orb_labels(m)
+
+  integer :: i,j,ngroups,igroup,accu_idx,group_sze
+  double precision :: accu
+  double precision, allocatable  :: mo_coef_new(:,:), U(:,:),D(:), A(:,:), Vt(:,:), work(:)
+  double precision, allocatable  :: Utot(:,:),Dtot(:)
+  integer, allocatable           :: group_idx(:), ref_idx(:), total_idx(:), total_idx_rev(:), group_start_idx(:)
+
+  !DIR$ ATTRIBUTES ALIGN : $IRP_ALIGN :: mo_coef_new, U, Vt, A
+
+  allocate(ref_idx(m),total_idx(m),total_idx_rev(m),Utot(lda,n),Dtot(m))
+  Utot=0.d0
+  Dtot=0.d0
+
+
+  call write_time(6)
+  if (m /= mo_num) then
+    print *, irp_here, ': Error : m/= mo_num'
+    stop 1
+  endif
+
+  do i=1,m
+    ref_idx(i)=i
+  enddo
+
+  call simplify_label_list(m, orb_labels)
+  ngroups = maxval(orb_labels)
+
+  allocate(group_start_idx(ngroups))
+
+  group_start_idx=0
+  accu_idx = 0
+
+  do igroup = 1, ngroups
+    group_start_idx(igroup) = accu_idx           ! number of orbs preceding this group
+    group_idx = pack(ref_idx,orb_labels==igroup) ! global idx of each orb in this group
+    group_sze = size(group_idx)                  ! number of orbs in this group
+    do i = 1, group_sze
+      total_idx(group_start_idx(igroup) + i) = group_idx(i)     ! total_idx(i) is location of local orb i within global MOs
+      total_idx_rev(group_idx(i)) = group_start_idx(igroup) + i ! total_idx_rev(i) is location of global MO i within blocked space
+    enddo
+
+    allocate(A(group_sze,group_sze),U(group_sze,group_sze),D(group_sze),Vt(group_sze,group_sze))
+
+    do j=1,group_sze
+      do i=1,group_sze
+        A(i,j) = matrix(group_idx(i), group_idx(j)) !map from global DM to single group block
+      enddo
+    enddo
+    call svd(A,group_sze,U,group_sze,D,Vt,group_sze,group_sze,group_sze)
+
+    do j=1,group_sze
+      Dtot(total_idx_rev(group_start_idx(igroup)+i)) = D(i)
+      do i=1,group_sze
+        Utot(total_idx_rev(group_start_idx(igroup) + i), total_idx_rev(group_start_idx(igroup) + j)) = U(i, j)
+      enddo
+    enddo
+
+    accu_idx += group_sze
+    deallocate(A,U,D,Vt)
+  enddo
+
+  allocate(mo_coef_new(ao_num,m))
+  mo_coef_new = mo_coef
+
+
+  write (6,'(A)') 'MOs are now **'//trim(label)//'**'
+  write (6,'(A)')  ''
+  write (6,'(A)') 'Eigenvalues'
+  write (6,'(A)')  '-----------'
+  write (6,'(A)') ''
+  write (6,'(A)')  '======== ================ ================'
+  write (6,'(A)')  '   MO       Eigenvalue       Cumulative   '
+  write (6,'(A)')  '======== ================ ================'
+
+  accu = 0.d0
+  do i=1,m
+    accu = accu + Dtot(i)
+    write (6,'(I8,1X,F16.10,1X,F16.10)')  i,Dtot(i), accu
+  enddo
+  write (6,'(A)')  '======== ================ ================'
+  write (6,'(A)')  ''
+
+  call dgemm('N','N',ao_num,m,m,1.d0,mo_coef_new,size(mo_coef_new,1),Utot,size(Utot,1),0.d0,mo_coef,size(mo_coef,1))
+
+  do i=1,m
+    eig(i) = Dtot(i)
+  enddo
+
+  deallocate(ref_idx, total_idx, total_idx_rev, Utot, Dtot, group_start_idx, mo_coef_new)
+  call write_time(6)
+
+  mo_label = label
+
+end
+
+
 subroutine mo_coef_new_as_svd_vectors_of_mo_matrix_eig(matrix,lda,m,n,mo_coef_before,eig,mo_coef_new)
   implicit none
   BEGIN_DOC
