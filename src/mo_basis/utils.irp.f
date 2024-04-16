@@ -296,14 +296,17 @@ subroutine mo_as_svd_vectors_of_mo_matrix_eig_groups(matrix,lda,m,n,eig,label,or
     do j=1,group_sze
       do i=1,group_sze
         A(i,j) = matrix(group_idx(i), group_idx(j)) !map from global DM to single group block
+        !write(*,'(4(A,I0),A,E25.15)') 'A(',i,',',j,') = matrix(',group_idx(i),',',group_idx(j),')',A(i,j)
       enddo
     enddo
     call svd(A,group_sze,U,group_sze,D,Vt,group_sze,group_sze,group_sze)
 
-    do j=1,group_sze
+    do i=1,group_sze
       Dtot(total_idx_rev(group_start_idx(igroup)+i)) = D(i)
-      do i=1,group_sze
+      !write(*,'(2(A,I0),A,E25.15)') 'Dtot(',total_idx_rev(group_start_idx(igroup)+i),') = D(',i,')',D(i)
+      do j=1,group_sze
         Utot(total_idx_rev(group_start_idx(igroup) + i), total_idx_rev(group_start_idx(igroup) + j)) = U(i, j)
+        !write(*,'(4(A,I0),A,E25.15)') 'Utot(',total_idx_rev(group_start_idx(igroup) + i),',',total_idx_rev(group_start_idx(igroup) + j),') = U(',i,',',j,')',U(i,j)
       enddo
     enddo
 

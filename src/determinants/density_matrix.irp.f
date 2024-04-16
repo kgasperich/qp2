@@ -366,17 +366,15 @@ subroutine save_natural_mos_block
    print *,'debug initial NOs'
    do i=1,ao_num
      do j=1,mo_num
-       write(*, '(E25.15)', advance='no') mo_coef(i,j)
+       write(*, '(2I5, E25.15)') i,j,mo_coef(i,j)
      enddo
-     print *,''
    enddo
    call orthonormalize_mos
    print *,'debug orthonormalized NOs'
    do i=1,ao_num
      do j=1,mo_num
-       write(*, '(E25.15)', advance='no') mo_coef(i,j)
+       write(*, '(2I5, E25.15)') i,j,mo_coef(i,j)
      enddo
-     print *,''
    enddo
 
    call save_mos
@@ -407,7 +405,7 @@ subroutine set_natural_mos_block
     endif
     print*,'debug MO labels'
     do i=1,mo_num
-      write(*, '(2I5)') orb_labels(i)
+      write(*, '(3(I0,X))') orb_labels(i), ormas_space_idx(i), mo_symmetry(i)
     enddo
    call mo_as_svd_vectors_of_mo_matrix_eig_groups(one_e_dm_mo,size(one_e_dm_mo,1),mo_num,mo_num,mo_occ,label,orb_labels)
    soft_touch mo_occ
