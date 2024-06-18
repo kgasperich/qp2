@@ -257,7 +257,6 @@ subroutine mo_as_svd_vectors_of_mo_matrix_eig_groups(matrix,lda,m,n,eig,label,or
   double precision, allocatable  :: Utot(:,:),Dtot(:)
   integer, allocatable           :: group_idx(:), ref_idx(:), total_idx(:), total_idx_rev(:), group_start_idx(:)
 
-  !DIR$ ATTRIBUTES ALIGN : $IRP_ALIGN :: mo_coef_new, U, Vt, A
 
   allocate(ref_idx(m),total_idx(m),total_idx_rev(m),Utot(lda,n),Dtot(m))
   Utot=0.d0
@@ -273,9 +272,24 @@ subroutine mo_as_svd_vectors_of_mo_matrix_eig_groups(matrix,lda,m,n,eig,label,or
   do i=1,m
     ref_idx(i)=i
   enddo
+  !print *,'debug: start rdm'
+  !do i=1,lda
+  !  print '(1000E25.15)',matrix(i,:)
+  !enddo
+  !print *,'debug: end rdm'
+  !print *,'debug: start label init'
+  !print '(1000I8)',orb_labels
+  !print *,'debug: end label init'
 
   call simplify_label_list(m, orb_labels)
   ngroups = maxval(orb_labels)
+  !print *,'debug: start label final'
+  !print '(1000I8)',orb_labels
+  !print *,'debug: end label final'
+
+  !do i=1,m
+  !    write(*, '((I0,X))') orb_labels(i)
+  !enddo
 
   allocate(group_start_idx(ngroups))
 
@@ -286,9 +300,15 @@ subroutine mo_as_svd_vectors_of_mo_matrix_eig_groups(matrix,lda,m,n,eig,label,or
     group_start_idx(igroup) = accu_idx           ! number of orbs preceding this group
     group_idx = pack(ref_idx,orb_labels==igroup) ! global idx of each orb in this group
     group_sze = size(group_idx)                  ! number of orbs in this group
+    !print *,'group ',igroup
+    !print *,'start_idx ',accu_idx
+    !print *,'group_sze ',group_sze
+    !print '(1000I4)',(group_idx(i),i=1,group_sze)
     do i = 1, group_sze
       total_idx(group_start_idx(igroup) + i) = group_idx(i)     ! total_idx(i) is location of local orb i within global MOs
       total_idx_rev(group_idx(i)) = group_start_idx(igroup) + i ! total_idx_rev(i) is location of global MO i within blocked space
+      !print *,'     total_idx(',group_start_idx(igroup)+i,') = ',group_idx(i)
+      !print *,' total_idx_rev(',group_idx(i),') = ',group_start_idx(igroup)+i
     enddo
 
     allocate(A(group_sze,group_sze),U(group_sze,group_sze),D(group_sze),Vt(group_sze,group_sze))
@@ -299,16 +319,44 @@ subroutine mo_as_svd_vectors_of_mo_matrix_eig_groups(matrix,lda,m,n,eig,label,or
         !write(*,'(4(A,I0),A,E25.15)') 'A(',i,',',j,') = matrix(',group_idx(i),',',group_idx(j),')',A(i,j)
       enddo
     enddo
+     !print *,'debug: start Ai ',igroup
+     !do i=1,group_sze
+     !  print '(1000E25.15)',A(i,:)
+     !enddo
+     !print *,'debug: end Ai ',igroup
     call svd(A,group_sze,U,group_sze,D,Vt,group_sze,group_sze,group_sze)
+     !print *,'debug: start Ui ',igroup
+     !do i=1,group_sze
+     !  print '(1000E25.15)',U(i,:)
+     !enddo
+     !print *,'debug: end Ui ',igroup
+     !print *,'debug: start Vti ',igroup
+     !do i=1,group_sze
+     !  print '(1000E25.15)',Vt(i,:)
+     !enddo
+     !print *,'debug: end Vti ',igroup
+     !print *,'debug: start Di ',igroup
+     !print '(1000E25.15)',D
+     !print *,'debug: end Di ',igroup
 
     do i=1,group_sze
-      Dtot(total_idx_rev(group_start_idx(igroup)+i)) = D(i)
+      !Dtot(total_idx_rev(group_start_idx(igroup)+i)) = D(i)
+      Dtot(group_idx(i)) = D(i)
       !write(*,'(2(A,I0),A,E25.15)') 'Dtot(',total_idx_rev(group_start_idx(igroup)+i),') = D(',i,')',D(i)
       do j=1,group_sze
-        Utot(total_idx_rev(group_start_idx(igroup) + i), total_idx_rev(group_start_idx(igroup) + j)) = U(i, j)
+        !Utot(total_idx_rev(group_start_idx(igroup) + i), total_idx_rev(group_start_idx(igroup) + j)) = U(i, j)
+        Utot(group_idx(i), group_idx(j)) = U(i, j)
         !write(*,'(4(A,I0),A,E25.15)') 'Utot(',total_idx_rev(group_start_idx(igroup) + i),',',total_idx_rev(group_start_idx(igroup) + j),') = U(',i,',',j,')',U(i,j)
       enddo
     enddo
+  !print *,'debug: start tmp Utot ',igroup
+  !do i=1,lda
+  !  print '(1000E25.15)',Utot(i,:)
+  !enddo
+  !print *,'debug: end tmp Utot ',igroup
+  !print *,'debug: start tmp Dtot ',igroup
+  !print '(1000E25.15)',Dtot
+  !print *,'debug: end tmp Dtot ',igroup
 
     accu_idx += group_sze
     deallocate(A,U,D,Vt)
@@ -335,13 +383,22 @@ subroutine mo_as_svd_vectors_of_mo_matrix_eig_groups(matrix,lda,m,n,eig,label,or
   write (6,'(A)')  '======== ================ ================'
   write (6,'(A)')  ''
 
+  !print *,'debug: start Utot'
+  !do i=1,lda
+  !  print '(1000E25.15)',Utot(i,:)
+  !enddo
+  !print *,'debug: end Utot'
+  !print *,'debug: start Dtot'
+  !print '(1000E25.15)',Dtot
+  !print *,'debug: end Dtot'
+
   call dgemm('N','N',ao_num,m,m,1.d0,mo_coef_new,size(mo_coef_new,1),Utot,size(Utot,1),0.d0,mo_coef,size(mo_coef,1))
 
   do i=1,m
     eig(i) = Dtot(i)
   enddo
 
-  deallocate(ref_idx, total_idx, total_idx_rev, Utot, Dtot, group_start_idx, mo_coef_new)
+  !deallocate(ref_idx, total_idx, total_idx_rev, Utot, Dtot, group_start_idx, mo_coef_new)
   call write_time(6)
 
   mo_label = label

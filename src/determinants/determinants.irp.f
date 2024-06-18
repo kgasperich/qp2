@@ -470,6 +470,16 @@ subroutine save_ref_determinant
   call save_wavefunction_general(1,N_states,ref_bitmask,1,buffer)
 end
 
+subroutine save_first_determinant
+  implicit none
+  use bitmasks
+  double precision               :: buffer(1,N_states)
+  buffer = 0.d0
+  buffer(1,1) = 1.d0
+  call debug_det(psi_det(:,:,1),N_int)
+  call save_wavefunction_general(1,N_states,psi_det(:,:,1),1,buffer)
+end
+
 
 
 

@@ -16,7 +16,7 @@ program save_natorb_block
   read_wf = .True.
   touch read_wf
   call save_natural_mos_block
-  call save_ref_determinant
+  call save_first_determinant
   call ezfio_set_mo_two_e_ints_io_mo_two_e_integrals('None')
   call ezfio_set_mo_one_e_ints_io_mo_one_e_integrals('None')
   call ezfio_set_mo_one_e_ints_io_mo_integrals_kinetic('None')

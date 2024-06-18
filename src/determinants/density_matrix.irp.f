@@ -361,21 +361,29 @@ subroutine save_natural_mos_block
    ! the |MO| basis
    END_DOC
    integer :: i,j
+   print *,'debug: start initial MOs'
+   do i=1,ao_num
+     write(*, '(1000E25.15)') mo_coef(i,:)
+   enddo
+   print *,'debug: end initial MOs'
    call set_natural_mos_block
+   print *,'debug: start initial NOs'
+   do i=1,ao_num
+     write(*, '(1000E25.15)') mo_coef(i,:)
+   enddo
+   print *,'debug: end initial NOs'
    call nullify_small_elements(ao_num,mo_num,mo_coef,size(mo_coef,1),1.d-10)
-   print *,'debug initial NOs'
+   print *,'debug: start clean NOs'
    do i=1,ao_num
-     do j=1,mo_num
-       write(*, '(2I5, E25.15)') i,j,mo_coef(i,j)
-     enddo
+     write(*, '(1000E25.15)') mo_coef(i,:)
    enddo
+   print *,'debug: end clean NOs'
    call orthonormalize_mos
-   print *,'debug orthonormalized NOs'
+   print *,'debug: start orthonormalized NOs'
    do i=1,ao_num
-     do j=1,mo_num
-       write(*, '(2I5, E25.15)') i,j,mo_coef(i,j)
-     enddo
+     write(*, '(1000E25.15)') mo_coef(i,:)
    enddo
+   print *,'debug: end orthonormalized NOs'
 
    call save_mos
 end
@@ -389,6 +397,7 @@ subroutine set_natural_mos_block
    character*(64)                 :: label
    double precision, allocatable  :: tmp(:,:)
    integer                        :: orb_labels(mo_num)
+   integer                        :: mo_sym_max_idx
 
    label = "Natural"
     integer :: i,j,iorb,jorb
@@ -399,14 +408,26 @@ subroutine set_natural_mos_block
      enddo
     enddo
 
-    orb_labels = mo_symmetry * (ormas_n_space+2)
+    mo_sym_max_idx = maxval(mo_symmetry)
+
+    !orb_labels = mo_symmetry * (ormas_n_space+2)
+    !if (do_ormas) then
+    !  orb_labels = orb_labels + ormas_space_idx
+    !endif
+
+    ! order by ormas_space_idx, then mo_symmetry index
     if (do_ormas) then
-      orb_labels = orb_labels + ormas_space_idx
+      orb_labels = (ormas_space_idx - 1) * mo_sym_max_idx
+    else
+      orb_labels = 0
     endif
-    print*,'debug MO labels'
-    do i=1,mo_num
-      write(*, '(3(I0,X))') orb_labels(i), ormas_space_idx(i), mo_symmetry(i)
-    enddo
+    orb_labels = orb_labels + mo_symmetry
+
+    !print*,'debug: MO labels; (I, i_ormas, i_symm)'
+    !do i=1,mo_num
+    !  write(*, '(3(I0,X))') orb_labels(i), ormas_space_idx(i), mo_symmetry(i)
+    !enddo
+
    call mo_as_svd_vectors_of_mo_matrix_eig_groups(one_e_dm_mo,size(one_e_dm_mo,1),mo_num,mo_num,mo_occ,label,orb_labels)
    soft_touch mo_occ
 end
