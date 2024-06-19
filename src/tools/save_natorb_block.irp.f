@@ -15,7 +15,20 @@ program save_natorb_block
   PROVIDE nucl_coord
   read_wf = .True.
   touch read_wf
+  PROVIDE psi_det
+  call routine
+end
+subroutine routine
+  implicit none
+
+  integer(bit_kind)  :: tmp_det(N_int,2)
+
+  ! psi_det will be invalidated when MOs are rotated
+  ! save first det to use as starting guess for next round of CIPSI
+  ! much easier than trying to make ref_bitmask that will fit all ORMAS constraints
+  tmp_det = psi_det(:,:,1)
   call save_natural_mos_block
+  psi_det(:,:,1) = tmp_det
   call save_first_determinant
   call ezfio_set_mo_two_e_ints_io_mo_two_e_integrals('None')
   call ezfio_set_mo_one_e_ints_io_mo_one_e_integrals('None')
