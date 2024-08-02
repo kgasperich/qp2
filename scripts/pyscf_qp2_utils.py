@@ -1482,6 +1482,37 @@ def save_1det_to_ezfio(mf, ezpath, hplist = None, n_det_max = 10000, selection_f
 
     return
 
+def save_Ndet_to_ezfio(mf, ezpath, coefs = None, hplists = None, n_det_max = 10000, selection_factor=0.2, save_symm=False):
+    nao, nmo = mf.mo_coeff.shape
+    N_int = ((nmo-1) // 64) + 1
+
+    hfdet = get_hfdet(nmo, mf.mol.nelec)
+
+    save_pyscf_to_ezfio(mf, ezpath, save_symm = save_symm)
+
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    ezf.set_determinants_bit_kind(8)
+    ezf.set_determinants_n_int(N_int)
+    ezf.set_determinants_n_states(1)
+    ezf.set_determinants_n_det_max(n_det_max)
+    ezf.set_determinants_selection_factor(selection_factor)
+    ndet = len(coefs)
+    if len(hplists) != ndet:
+        raise
+    qpdets = [apply_hp(hfdet,hp_i) for hp_i in hplists]
+
+    ezf.set_determinants_mo_label('None')
+    ezf.set_determinants_n_det(ndet)
+    ezf.set_determinants_n_det_qp_edit(ndet)
+    ezf.set_determinants_psi_det(qpdets)
+    ezf.set_determinants_psi_det_qp_edit(qpdets)
+    ezf.set_determinants_psi_coef([list(coefs)])
+    ezf.set_determinants_psi_coef_qp_edit([list(coefs)])
+    ezf.set_determinants_read_wf(True)
+
+    return
+
 def set_ormas_ezfio(ezpath, ormas_info):
     nspace, min_e, max_e, mstart = ormas_info
 
@@ -1605,14 +1636,14 @@ def gen_core_ormas_atom(mf,hsym,psym,spin_idx=0):
 
     return hplist, ormas_info
 
-def save_ormas_ezfio(mf,hsym,psym,ezpath,n_det_max=10000,spin_idx=0,selection_factor=0.2):
+def save_ormas_ezfio(mf,hsym,psym,ezpath,n_det_max=10000,spin_idx=0,selection_factor=0.2, save_symm=False):
     hplist, ormas_info = gen_core_ormas_atom(mf,hsym,psym,spin_idx=spin_idx)
-    save_1det_to_ezfio(mf,ezpath,hplist=hplist,n_det_max=n_det_max,selection_factor=selection_factor)
+    save_1det_to_ezfio(mf,ezpath,hplist=hplist,n_det_max=n_det_max,selection_factor=selection_factor,save_symm=save_symm)
     set_ormas_ezfio(ezpath,ormas_info)
     return
 
-def save_ground_ezfio(mf,ezpath,n_det_max=10000,selection_factor=0.2):
-    save_1det_to_ezfio(mf,ezpath,n_det_max=n_det_max,selection_factor=selection_factor)
+def save_ground_ezfio(mf,ezpath,n_det_max=10000,selection_factor=0.2, save_symm=False):
+    save_1det_to_ezfio(mf,ezpath,n_det_max=n_det_max,selection_factor=selection_factor,save_symm=save_symm)
     return
 
 def move_ezfio(ez0,ez1):
