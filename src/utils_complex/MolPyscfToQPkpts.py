@@ -334,36 +334,52 @@ def print_kpts_unblocked_upper(ints_k,outfilename,thresh):
 
 
 
-def get_kin_ao(mf):
+def get_kin_ao(mf,kpts):
     nao = mf.cell.nao_nr()
-    Nk = len(mf.kpts)
-    return np.reshape(mf.cell.pbc_intor('int1e_kin',1,1,kpts=mf.kpts),(Nk,nao,nao))
+    Nk = len(kpts)
+    return np.reshape(mf.cell.pbc_intor('int1e_kin',1,1,kpts=kpts),(Nk,nao,nao))
 
-def get_ovlp_ao(mf):
+def get_ovlp_ao(mf,kpts):
     nao = mf.cell.nao_nr()
-    Nk = len(mf.kpts)
-    return np.reshape(mf.get_ovlp(cell=mf.cell,kpts=mf.kpts),(Nk,nao,nao))
+    Nk = len(kpts)
+    return np.reshape(mf.get_ovlp(cell=mf.cell,kpts=kpts),(Nk,nao,nao))
 
-def get_pot_ao(mf):
+def get_pot_ao(mf,kpts):
     nao = mf.cell.nao_nr()
-    Nk = len(mf.kpts)
+    Nk = len(kpts)
 
     if mf.cell.pseudo:
-        v_kpts_ao = np.reshape(mf.with_df.get_pp(kpts=mf.kpts),(Nk,nao,nao))
+        v_kpts_ao = np.reshape(mf.with_df.get_pp(kpts=kpts),(Nk,nao,nao))
     else:
-        v_kpts_ao = np.reshape(mf.with_df.get_nuc(kpts=mf.kpts),(Nk,nao,nao))
+        v_kpts_ao = np.reshape(mf.with_df.get_nuc(kpts=kpts),(Nk,nao,nao))
 
     if len(mf.cell._ecpbas) > 0:
         from pyscf.pbc.gto import ecp
-        v_kpts_ao += np.reshape(ecp.ecp_int(mf.cell, mf.kpts),(Nk,nao,nao))
+        v_kpts_ao += np.reshape(ecp.ecp_int(mf.cell, kpts),(Nk,nao,nao))
 
     return v_kpts_ao
 
 def ao_to_mo_1e(ao_kpts,mo_coef):
     return np.einsum('kim,kij,kjn->kmn',mo_coef.conj(),ao_kpts,mo_coef)
 
-def get_j3ao_old(fname,nao,Nk):
+def has_ij(ij,ilist):
+    """
+    return True if i and j from compound idx ij are both in ilist
+    """
+    i,j = idx2_rev(ij)
+    return ((i in ilist) and (j in ilist))
+
+def has_ij_sq(ij,n,ilist):
+    """
+    return True if i and j from compound idx ij in square of size n are both in ilist
+    """
+    i,j = divmod(ij,n)
+    return ((i in ilist) and (j in ilist))
+
+def get_j3ao_old(fname,nao,Nk0,kpt_idx):
     '''
+    Nk0 is full size of kpts stored in file
+    kpt_idx is list of indices of subset of kpts to filter on
     returns list of Nk_pair arrays of shape (naux,nao,nao)
     if naux is the same for each pair, returns numpy array
     if naux is not the same for each pair, returns array of arrays
@@ -373,16 +389,21 @@ def get_j3ao_old(fname,nao,Nk):
         j3c = intfile.get('j3c')
         j3ckeys = list(j3c.keys())
         j3ckeys.sort(key=lambda strkey:int(strkey))
-        assert(len(j3ckeys) == (Nk*(Nk+1))//2)
+        assert(len(j3ckeys) == (Nk0*(Nk0+1))//2)
+        Nk = len(kpt_idx)
+        assert(Nk <= Nk0)
     
+        j3ckeys_filt = [i for i in j3ckeys if has_ij(int(i),kpt_idx)]
+        if (len(j3ckeys_filt) != (Nk*(Nk+1))//2):
+            raise ValueError('problem in get_j3ao_old; contact developer')
         # in new(?) version of PySCF, there is an extra layer of groups before the datasets
         # datasets used to be [/j3c/0,   /j3c/1,   /j3c/2,   ...]
         # datasets now are    [/j3c/0/0, /j3c/1/0, /j3c/2/0, ...]
-        j3clist = [j3c.get(i+'/0') for i in j3ckeys]
+        j3clist = [j3c.get(i+'/0') for i in j3ckeys_filt]
         #if j3clist==[None]*len(j3clist):
         if not(any(j3clist)):
         # if using older version, stop before last level
-            j3clist = [j3c.get(i) for i in j3ckeys]
+            j3clist = [j3c.get(i) for i in j3ckeys_filt]
     
         naosq = nao*nao
         naotri = (nao*(nao+1))//2
@@ -392,7 +413,7 @@ def get_j3ao_old(fname,nao,Nk):
         # output dimensions should be reversed (nao, nao, naux, nkptpairs)
         return np.array([(i.value.reshape([-1,nao,nao]) if (i.shape[1] == naosq) else makesq3(i.value,nao)) * nkinvsq for i in j3clist])
 
-def get_j3ao(fname,nao,Nk):
+def get_j3ao(fname,nao,Nk0,kpt_idx):
     '''
     returns padded df AO array
     fills in zeros when functions are dropped due to linear dependency
@@ -403,18 +424,26 @@ def get_j3ao(fname,nao,Nk):
     with h5py.File(fname,'r') as intfile:
         j3c = intfile.get('j3c')
         j3ckeys = list(j3c.keys())
-        nkpairs = len(j3ckeys)
-        assert(nkpairs == (Nk*(Nk+1))//2)
+        nkpairs0 = len(j3ckeys)
+        assert(nkpairs0 == (Nk0*(Nk0+1))//2)
 
         # get num order instead of lex order
         j3ckeys.sort(key=lambda strkey:int(strkey))
+        
+        Nk = len(kpt_idx)
+        assert(Nk <= Nk0)
+    
+        j3ckeys_filt = [i for i in j3ckeys if has_ij(int(i),kpt_idx)]
+        if (len(j3ckeys_filt) != (Nk*(Nk+1))//2):
+            raise ValueError('problem in get_j3ao; contact developer')
+        nkpairs = len(j3ckeys_filt)
 
         # in new(?) version of PySCF, there is an extra layer of groups before the datasets
         # datasets used to be [/j3c/0,   /j3c/1,   /j3c/2,   ...]
         # datasets now are    [/j3c/0/0, /j3c/1/0, /j3c/2/0, ...]
         keysub = '/0' if bool(j3c.get('0/0',getclass=True)) else ''
 
-        naux = max(map(lambda k: j3c[k+keysub].shape[0],j3c.keys()))
+        naux = max(map(lambda k: j3c[k+keysub].shape[0],j3ckeys_filt))
 
         naosq = nao*nao
         naotri = (nao*(nao+1))//2
@@ -422,7 +451,7 @@ def get_j3ao(fname,nao,Nk):
 
         j3arr = np.zeros((nkpairs,naux,nao,nao),dtype=np.complex128)
 
-        for i,kpair in enumerate(j3ckeys):
+        for i,kpair in enumerate(j3ckeys_filt):
             iaux,dim2 = j3c[kpair+keysub].shape
             if (dim2==naosq):
                 j3arr[i,:iaux,:,:] = j3c[kpair+keysub][()].reshape([iaux,nao,nao]) * nkinvsq
@@ -433,7 +462,7 @@ def get_j3ao(fname,nao,Nk):
 
         return j3arr
 
-def get_j3ao_big(fname,nao,Nk):
+def get_j3ao_big(fname,nao,Nk0,kpt_idx):
     '''
     returns padded df AO array
     fills in zeros when functions are dropped due to linear dependency
@@ -444,11 +473,19 @@ def get_j3ao_big(fname,nao,Nk):
     with h5py.File(fname,'r') as intfile:
         j3c = intfile.get('j3c')
         j3ckeys = list(j3c.keys())
-        nkpairs = len(j3ckeys)
-        assert(nkpairs == (Nk*(Nk+1))//2)
+        nkpairs0 = len(j3ckeys)
+        assert(nkpairs0 == (Nk0*(Nk0+1))//2)
 
         # get num order instead of lex order
         j3ckeys.sort(key=lambda strkey:int(strkey))
+        
+        Nk = len(kpt_idx)
+        assert(Nk <= Nk0)
+    
+        j3ckeys_filt = [i for i in j3ckeys if has_ij(int(i),kpt_idx)]
+        if (len(j3ckeys_filt) != (Nk*(Nk+1))//2):
+            raise ValueError('problem in get_j3ao_big; contact developer')
+        nkpairs = len(j3ckeys_filt)
 
         # in new(?) version of PySCF, there is an extra layer of groups before the datasets
         # datasets used to be [/j3c/0,   /j3c/1,   /j3c/2,   ...]
@@ -456,7 +493,7 @@ def get_j3ao_big(fname,nao,Nk):
         #keysub = '/0' if bool(j3c.get('0/0',getclass=True)) else ''
 
         #naux = max(map(lambda k: j3c[k+keysub].shape[0],j3c.keys()))
-        naux = max(map(lambda k: j3c[k]['0'].shape[0],j3c.keys()))
+        naux = max(map(lambda k: j3c[k]['0'].shape[0],j3ckeys_filt))
 
         naosq = nao*nao
         naotri = (nao*(nao+1))//2
@@ -464,7 +501,7 @@ def get_j3ao_big(fname,nao,Nk):
 
         j3arr = np.zeros((nkpairs,naux,nao,nao),dtype=np.complex128)
 
-        for i,kpair in enumerate(j3ckeys):
+        for i,kpair in enumerate(j3ckeys_filt):
             #iaux,dim2 = j3c[kpair+keysub].shape
             tmpdat = np.concatenate([j3c[kpair][ii][()] for ii in j3c[kpair]],axis=1)
             iaux,dim2 = tmpdat.shape
@@ -478,7 +515,7 @@ def get_j3ao_big(fname,nao,Nk):
         return j3arr
 
 
-def get_j3ao_new(fname,nao,Nk):
+def get_j3ao_new(fname,nao,Nk0,kpt_idx):
     '''
     returns padded df AO array
     fills in zeros when functions are dropped due to linear dependency
@@ -489,18 +526,27 @@ def get_j3ao_new(fname,nao,Nk):
     with h5py.File(fname,'r') as intfile:
         j3c = intfile.get('j3c')
         j3ckeys = list(j3c.keys())
-        nkpairs = len(j3ckeys)
-        assert(nkpairs == (Nk*(Nk+1))//2)
+        nkpairs0 = len(j3ckeys)
+        assert(nkpairs0 == (Nk0*(Nk0+1))//2)
 
         # get num order instead of lex order
         j3ckeys.sort(key=lambda strkey:int(strkey))
+        
+        Nk = len(kpt_idx)
+        assert(Nk <= Nk0)
+    
+        j3ckeys_filt = [i for i in j3ckeys if has_ij(int(i),kpt_idx)]
+        if (len(j3ckeys_filt) != (Nk*(Nk+1))//2):
+            raise ValueError('problem in get_j3ao_new; contact developer')
+        nkpairs = len(j3ckeys_filt)
+
 
         # in new(?) version of PySCF, there is an extra layer of groups before the datasets
         # datasets used to be [/j3c/0,   /j3c/1,   /j3c/2,   ...]
         # datasets now are    [/j3c/0/0, /j3c/1/0, /j3c/2/0, ...]
         keysub = '/0' if bool(j3c.get('0/0',getclass=True)) else ''
 
-        naux = max(map(lambda k: j3c[k+keysub].shape[0],j3c.keys()))
+        naux = max(map(lambda k: j3c[k+keysub].shape[0],j3ckeys_filt))
         #naux = max(map(lambda k: j3c[k]['0'].shape[0],j3c.keys()))
 
         naosq = nao*nao
@@ -509,7 +555,7 @@ def get_j3ao_new(fname,nao,Nk):
 
         j3arr = np.zeros((nkpairs,naux,nao,nao),dtype=np.complex128)
 
-        for i,kpair in enumerate(j3ckeys):
+        for i,kpair in enumerate(j3ckeys_filt):
             iaux,dim2 = j3c[kpair+keysub].shape
             #tmpdat = np.concatenate([j3c[kpair][ii][()] for ii in j3c[kpair]],axis=1)
             #iaux,dim2 = tmpdat.shape
@@ -523,7 +569,7 @@ def get_j3ao_new(fname,nao,Nk):
         return j3arr
 
 
-def get_j3ao_221(fname,nao,Nk):
+def get_j3ao_221(fname,nao,Nk0,kpt_idx):
     '''
     for pyscf >= 2.2.1 (probably before this, but somewhere in the range (2.0.1, 2.2.1] )
     returns padded df AO array
@@ -532,18 +578,23 @@ def get_j3ao_221(fname,nao,Nk):
     (k, mu, j, i) where i.kpt >= j.kpt
     '''
     import h5py
+    Nk = len(kpt_idx)
+    assert(Nk <= Nk0)
     d0 = {}
     with h5py.File(fname,'r') as intfile:
         dkpts = intfile['kpts'][()]
         daosym = intfile['aosym'][()].decode()
         print(f'j3c aosym = {daosym}')
-        nkpts = len(dkpts)
-        assert(nkpts == Nk)
-        assert(len(intfile['j3c']) == nkpts**2)
-        ndfv = [intfile[f'j3c/{i}/0'].shape[0] for i in range(nkpts**2)]
+        nkpts0 = len(dkpts)
+        assert(nkpts0 == Nk0)
+        assert(len(intfile['j3c']) == nkpts0**2)
+        ndfv = [intfile[f'j3c/{i}/0'].shape[0] for i in range(nkpts0**2) if has_ij_sq(i,Nk0,kpt_idx)]
         ndfmax = max(ndfv)
-        for ki in range(nkpts**2):
-            d0[ki] = intfile[f'j3c/{ki}/0'][()]
+        for kij0 in range(nkpts0**2):
+            ki, kj = divmod(kij0,nkpts0)
+            if ((ki in kpt_idx) and (kj in kpt_idx)):
+                kij = ki * nkpts + kj
+                d0[kij] = intfile[f'j3c/{kij0}/0'][()]
     nkinvsq = 1./np.sqrt(nkpts)
     d1 = {}
     d2 = {}
@@ -639,7 +690,7 @@ def pyscf2QP2_mo(cell,mf,kpts,kmesh=None,cas_idx=None, int_threshold = 1E-8,qph5
 
 
 
-def pyscf2QP2(cell,mf, kpts, kmesh=None, cas_idx=None, int_threshold = 1E-8, 
+def pyscf2QP2(cell,mf, kpt_idx=None, kmesh=None, cas_idx=None, int_threshold = 1E-8, 
         qph5path = 'qpdat.h5', sp_twist=None,
         print_ao_ints_bi=False, 
         print_mo_ints_bi=False, 
@@ -649,7 +700,7 @@ def pyscf2QP2(cell,mf, kpts, kmesh=None, cas_idx=None, int_threshold = 1E-8,
         print_mo_ints_mono=False,
         print_debug=False):
     '''
-    kpts = List of kpoints coordinates. Cannot be null, for gamma is other script
+    kpt_idx = List of kpoint indices from full set of kpoints in mf
     kmesh = Mesh of kpoints (optional)
     cas_idx = List of active MOs. If not specified all MOs are actives
     int_threshold = The integral will be not printed in they are bellow that
@@ -660,6 +711,12 @@ def pyscf2QP2(cell,mf, kpts, kmesh=None, cas_idx=None, int_threshold = 1E-8,
     import h5py
 #    import scipy
     from scipy.linalg import block_diag
+
+    if kpt_idx is None:
+        # if no kpt_idx given, use full set from mf
+        kpt_idx = list(range(len(mf.kpts)))
+    kpts = np.array([mf.kpts[i] for i in kpt_idx])
+    Nk = len(kpts)
 
     mo_coef_threshold = int_threshold
     ovlp_threshold = int_threshold
@@ -688,16 +745,20 @@ def pyscf2QP2(cell,mf, kpts, kmesh=None, cas_idx=None, int_threshold = 1E-8,
     #    # we can either normalize here or after qp
     #    c2s = mf.cell.cart2sph_coeff(normalized='sp')
     #    mo_coeff = list(map(lambda x: np.dot(c2s,x),mf.mo_coeff))
-    mo_coeff = mf.mo_coeff
+    mo_coeff = [mf.mo_coeff_kpts[i] for i in kpt_idx]
+    mo_energy = [mf.mo_energy_kpts[i] for i in kpt_idx]
     # Mo_coeff actif
     mo_k = np.array([c[:,cas_idx] for c in mo_coeff] if cas_idx is not None else mo_coeff)
-    e_k =  np.array([e[cas_idx] for e in mf.mo_energy] if cas_idx is not None else mf.mo_energy)
+    e_k =  np.array([e[cas_idx] for e in mo_energy] if cas_idx is not None else mo_energy)
   
-    Nk, nao, nmo = mo_k.shape
+    tmp_Nk, nao, nmo = mo_k.shape
 
     print("n Kpts", Nk)
     print("n active Mos per kpt", nmo)
     print("n AOs per kpt", nao)
+    
+    if (tmp_Nk != Nk):
+        raise ValueError(f'problem with Nkpts: {Nk} != {tmp_Nk}')
 
     ##########################################
     #                                        #
@@ -883,9 +944,9 @@ def pyscf2QP2(cell,mf, kpts, kmesh=None, cas_idx=None, int_threshold = 1E-8,
     #                                        #
     ##########################################
     
-    ne_ao = get_pot_ao(mf)
-    kin_ao = get_kin_ao(mf)
-    ovlp_ao = get_ovlp_ao(mf)
+    ne_ao = get_pot_ao(mf,kpts)
+    kin_ao = get_kin_ao(mf,kpts)
+    ovlp_ao = get_ovlp_ao(mf,kpts)
 
     if print_ao_ints_mono:
 
