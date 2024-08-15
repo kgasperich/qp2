@@ -513,7 +513,23 @@ def save_mos_to_ezfio(mf,ezpath,save_symm=False):
             # pyscf symm labels start at 0; shift by 1 for QP2
             ezf.set_mo_basis_mo_symmetry(mf.mo_coeff.orbsym + 1)
         except AttributeError:
-            print("failed to save MO symmetry to {ezpath}")
+            print(f"failed to save MO symmetry to {ezpath}; setting all mo_symmetry labels to 1")
+            ezf.set_mo_basis_mo_symmetry([1]*nmo)
+    return
+
+def unset_mosymm(ezpath,nosym_idx):
+    """
+    nosym_idx orbs will have symm label set to separate group
+    to be used in cases where several orbitals have been rotated and symmetry broken
+    this will prevent them from mixing with clean symmetric orbs
+    """
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    oldsyms = ezf.get_mo_basis_mo_symmetry()
+    isym_max = max(oldsyms)
+    for i in nosym_idx:
+        oldsyms[i] = isym_max + 1
+    ezf.set_mo_basis_mo_symmetry(oldsyms)
     return
 
 def save_pyscf_to_ezfio(mf, ezpath, save_symm = False):
@@ -1652,3 +1668,21 @@ def move_ezfio(ez0,ez1):
 def copy_ezfio(ez0,ez1):
     return shutil.copytree(ez0,ez1)
 
+def read_overlap(fpath):
+    """
+    read ao overlap from output of qp_run print_overlap
+    """
+    with open(fpath,'r') as f:
+        d0 = f.read().strip().split('\n')
+
+    i0=-1
+    i1=-1
+    for i,line in enumerate(d0):
+        l = line.strip()
+        if l == 'START overlap':
+            i0 = i
+        elif l == 'END overlap':
+            i1 = i
+    if min(i0,i1)<0:
+        raise
+    return np.array([list(map(float,l.strip().split())) for l in d0[i0+1:i1]])

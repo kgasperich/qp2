@@ -473,11 +473,18 @@ end
 subroutine save_first_determinant
   implicit none
   use bitmasks
-  double precision               :: buffer(1,N_states)
-  buffer = 0.d0
+  double precision               :: buffer(1,1)
   buffer(1,1) = 1.d0
   call debug_det(psi_det(:,:,1),N_int)
-  call save_wavefunction_general(1,N_states,psi_det(:,:,1),1,buffer)
+  call save_wavefunction_general(1,1,psi_det(:,:,1),1,buffer)
+end
+
+subroutine save_first_ndet(ndet_save)
+  implicit none
+  use bitmasks
+  integer, intent(in) :: ndet_save
+  call debug_det(psi_det(:,:,:ndet_save),N_int)
+  call save_wavefunction_general(ndet_save,min(N_states,ndet_save),psi_det_sorted(:,:,:ndet_save),size(psi_coef_sorted,1),psi_coef_sorted)
 end
 
 

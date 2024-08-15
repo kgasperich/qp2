@@ -21,19 +21,36 @@ end
 subroutine routine
   implicit none
 
-  integer(bit_kind)  :: tmp_det(N_int,2)
-
+  integer(bit_kind), allocatable  :: tmp_det(:,:,:) !(N_int,2,ndet)
+  double precision, allocatable :: tmp_coef(:,:)
+  double precision :: c_02, c_i
+  integer :: ndet_save,i
   ! psi_det will be invalidated when MOs are rotated
-  ! save first det to use as starting guess for next round of CIPSI
+  ! save first dets to use as starting guess for next round of CIPSI
   ! much easier than trying to make ref_bitmask that will fit all ORMAS constraints
-  tmp_det = psi_det(:,:,1)
+  
+  ndet_save=N_det
+  c_02 = (psi_coef_sorted(1,1)*psi_coef_sorted(1,1))
+  do i=1,N_det
+    c_i = psi_coef_sorted(i,1)
+    if (c_i*c_i < (c_02 - 1.0d-7)) then
+      ndet_save = i-1
+      exit
+    endif
+  enddo
+  allocate(tmp_det(N_int, 2, ndet_save), tmp_coef(ndet_save,N_states))
+
+  tmp_det = psi_det_sorted(:,:,:ndet_save)
+  tmp_coef = psi_coef_sorted(:ndet_save,:)
+
   call save_natural_mos_block
-  psi_det(:,:,1) = tmp_det
-  call save_first_determinant
+
+  call save_wavefunction_general(ndet_save,min(N_states,ndet_save),tmp_det,size(tmp_coef,1),tmp_coef)
   call ezfio_set_mo_two_e_ints_io_mo_two_e_integrals('None')
   call ezfio_set_mo_one_e_ints_io_mo_one_e_integrals('None')
   call ezfio_set_mo_one_e_ints_io_mo_integrals_kinetic('None')
   call ezfio_set_mo_one_e_ints_io_mo_integrals_n_e('None')
   call ezfio_set_mo_one_e_ints_io_mo_integrals_pseudo('None')
+  deallocate(tmp_det,tmp_coef)
 end
 
