@@ -9,12 +9,27 @@ echo "QP_ROOT="$QP_ROOT
 unset CC
 unset CCXX
 
+TREXIO_VERSION=2.3.2
+
 # Force GCC instead of ICC for dependencies
 export CC=gcc
 
 # Download submodules
 git submodule init
 git submodule update
+
+# Update ARM or x86 dependencies
+SYSTEM=$(uname -s)
+if [[ $SYSTEM = "Linux" ]] ; then
+  SYSTEM=""
+fi
+ARCHITECTURE=$(uname -m)$SYSTEM
+cd ${QP_ROOT}/external/qp2-dependencies
+git checkout master
+git pull
+echo "Architecture: $ARCHITECTURE"
+cd ${QP_ROOT}
+
 
 function help()
 {
@@ -99,7 +114,7 @@ PACKAGES=$(echo $PACKAGES | xargs)
 
 echo "export QP_ROOT=\"$QP_ROOT\"" > ${QP_ROOT}/etc/00.qp_root.rc
 
-source quantum_package.rc
+source ${QP_ROOT}/quantum_package.rc
 
 
 
@@ -180,7 +195,7 @@ if [[ "${PACKAGES}.x" != ".x" ]] ; then
 fi
 
 if [[ ${PACKAGES} = all ]] ; then
-        PACKAGES="zlib ninja zeromq f77zmq gmp ocaml docopt resultsFile bats"
+        PACKAGES="zlib ninja zeromq f77zmq gmp ocaml docopt resultsFile bats trexio"
 fi
 
 
@@ -190,9 +205,61 @@ for PACKAGE in ${PACKAGES} ; do
 
             execute << EOF
               rm -f "\${QP_ROOT}"/bin/ninja
-              unzip "\${QP_ROOT}"/external/qp2-dependencies/ninja-linux.zip -d "\${QP_ROOT}"/bin
+              tar -zxvf "\${QP_ROOT}"/external/qp2-dependencies/${ARCHITECTURE}/ninja.tar.gz 
+              mv ninja "\${QP_ROOT}"/bin/
 EOF
 
+    elif [[ ${PACKAGE} = trexio-nohdf5 ]] ; then
+
+            VERSION=$TREXIO_VERSION
+            execute << EOF
+              cd "\${QP_ROOT}"/external
+              wget https://github.com/TREX-CoE/trexio/releases/download/v${VERSION}/trexio-${VERSION}.tar.gz
+              rm -rf trexio-${VERSION}
+              tar -zxf trexio-${VERSION}.tar.gz && rm trexio-${VERSION}.tar.gz
+              cd trexio-${VERSION}
+              ./configure --prefix=\${QP_ROOT} --without-hdf5 CFLAGS='-g'
+              make -j 8 && make -j 8 check && make -j 8 install
+              tar -zxvf "\${QP_ROOT}"/external/qp2-dependencies/${ARCHITECTURE}/ninja.tar.gz 
+              mv ninja "\${QP_ROOT}"/bin/
+EOF
+    elif [[ ${PACKAGE} = trexio ]] ; then
+
+            VERSION=$TREXIO_VERSION
+            execute << EOF
+              cd "\${QP_ROOT}"/external
+              wget https://github.com/TREX-CoE/trexio/releases/download/v${VERSION}/trexio-${VERSION}.tar.gz
+              rm -rf trexio-${VERSION}
+              tar -zxf trexio-${VERSION}.tar.gz && rm trexio-${VERSION}.tar.gz
+              cd trexio-${VERSION}
+              ./configure --prefix=\${QP_ROOT} CFLAGS="-g"
+              make -j 8 && make -j 8 check && make -j 8 install
+EOF
+    elif [[ ${PACKAGE} = qmckl ]] ; then
+
+            VERSION=0.5.4
+            execute << EOF
+              cd "\${QP_ROOT}"/external
+              wget https://github.com/TREX-CoE/qmckl/releases/download/v${VERSION}/qmckl-${VERSION}.tar.gz
+              rm -rf qmckl-${VERSION}
+              tar -zxf qmckl-${VERSION}.tar.gz && rm qmckl-${VERSION}.tar.gz
+              cd qmckl-${VERSION}
+              ./configure --prefix=\${QP_ROOT} --enable-hpc --disable-doc CFLAGS='-g'
+              make && make -j 4 check && make install
+EOF
+    elif [[ ${PACKAGE} = qmckl-intel ]] ; then
+
+            VERSION=0.5.4
+            execute << EOF
+              cd "\${QP_ROOT}"/external
+              wget https://github.com/TREX-CoE/qmckl/releases/download/v${VERSION}/qmckl-${VERSION}.tar.gz
+              rm -rf qmckl-${VERSION}
+              tar -zxf qmckl-${VERSION}.tar.gz && rm qmckl-${VERSION}.tar.gz
+              cd qmckl-${VERSION}
+              ./configure --prefix=\${QP_ROOT} --enable-hpc --disable-doc --with-icc --with-ifort CFLAGS='-g'
+              make && make -j 4 check && make install
+EOF
+ 
 
     elif [[ ${PACKAGE} = gmp ]] ; then
 
@@ -212,6 +279,7 @@ EOF
               cd "\${QP_ROOT}"/external
               tar --gunzip --extract --file qp2-dependencies/zeromq-4.2.5.tar.gz
               cd zeromq-*
+              [[ "${SYSTEM}" = "Darwin" ]] && ./autogen.sh
               ./configure --prefix="\$QP_ROOT" --without-libsodium --enable-libunwind=no
               make -j 8
               make install
@@ -222,7 +290,7 @@ EOF
 
             execute << EOF
               cd "\${QP_ROOT}"/external
-              tar --gunzip --extract --file qp2-dependencies/f77-zmq-4.3.2.tar.gz
+              tar --gunzip --extract --file qp2-dependencies/f77-zmq-4.3.?.tar.gz
               cd f77-zmq-*
               ./configure --prefix=\$QP_ROOT
               export ZMQ_H="\$QP_ROOT"/include/zmq.h
@@ -234,11 +302,13 @@ EOF
 
          execute <<EOF
             source "${QP_ROOT}"/quantum_package.rc
+            rm -rf "${QP_ROOT}"/external/opampack
             cd "${QP_ROOT}"/external/
-            tar --gunzip --extract --file qp2-dependencies/ocaml-bundle_x86.tar.gz
-            echo "" | ./ocaml-bundle/bootstrap.sh "${QP_ROOT}"
-            ./ocaml-bundle/configure.sh "${QP_ROOT}"
-            echo "" | ./ocaml-bundle/compile.sh "${QP_ROOT}"
+            tar --gunzip --extract --file qp2-dependencies/${ARCHITECTURE}/opampack.tar.gz
+            cd "${QP_ROOT}"/external/opampack
+            ./install.sh
+            export OPAMROOT="${QP_ROOT}"/external/opampack/opamroot
+            eval \$("${QP_ROOT}"/external/opampack/opam env)
 EOF
 
     elif [[ ${PACKAGE} = bse ]] ; then
@@ -246,7 +316,7 @@ EOF
             execute << EOF
               cd "\${QP_ROOT}"/external
               tar --gunzip --extract --file qp2-dependencies/bse-v0.8.11.tar.gz
-              pip install -e basis_set_exchange-*
+              python3 -m pip install -e basis_set_exchange-*
 EOF
 
     elif [[ ${PACKAGE} = zlib ]] ; then
@@ -281,8 +351,8 @@ EOF
 
             execute << EOF
               cd "\${QP_ROOT}"/external
-              tar -zxf qp2-dependencies/bats-v1.1.0.tar.gz
-              ( cd bats-core-1.1.0/ ; ./install.sh \${QP_ROOT})
+              tar -zxf qp2-dependencies/bats-v1.7.0.tar.gz
+              ( cd bats-core-1.7.0/ ; ./install.sh \${QP_ROOT})
 EOF
 
     else
@@ -293,7 +363,7 @@ EOF
 
 done
 
-source quantum_package.rc
+source ${QP_ROOT}/quantum_package.rc
 
 NINJA=$(find_exe ninja)
 if [[ ${NINJA} = $(not_found) ]] ; then
@@ -303,9 +373,40 @@ fi
 
 ZEROMQ=$(find_lib -lzmq)
 if [[ ${ZEROMQ} = $(not_found) ]] ; then
+
+        MAKE=$(find_exe make)
+        if [[ ${MAKE} = $(not_found) ]] ; then
+                error "make is not installed."
+                fail
+        fi
+
+        M4=$(find_exe autoreconf)
+        if [[ ${M4} = $(not_found) ]] ; then
+                error "autoreconf is not installed."
+                fail
+        fi
+
+        M4=$(find_exe m4)
+        if [[ ${M4} = $(not_found) ]] ; then
+                error "m4 preprocesssor is not installed."
+                fail
+        fi
+
         error "ZeroMQ (zeromq) is not installed."
         fail
 fi
+
+TREXIO=$(find_lib -ltrexio)
+if [[ ${TREXIO} = $(not_found) ]] ; then
+        error "TREXIO (trexio | trexio-nohdf5) is not installed. If you don't have HDF5, use trexio-nohdf5"
+        fail
+fi
+
+#QMCKL=$(find_lib -lqmckl)
+#if [[ ${QMCKL} = $(not_found) ]] ; then
+#        error "QMCkl (qmckl | qmckl-intel) is not installed."
+#        fail
+#fi
 
 F77ZMQ=$(find_lib -lzmq -lf77zmq -lpthread)
 if [[ ${F77ZMQ} = $(not_found) ]] ; then
@@ -319,7 +420,7 @@ if [[ ${ZLIB} = $(not_found) ]] ; then
         fail
 fi
 
-OCAML=$(find_exe ocaml)
+OCAML=$(find_exe ocamlc)
 if [[ ${OCAML} = $(not_found) ]] ; then
         error "OCaml (ocaml) compiler is not installed."
         fail
@@ -375,7 +476,7 @@ else
       echo ""
       echo "${QP_ROOT}/build.ninja does not exist,"
       echo "you need to specify the COMPILATION configuration file."
-      echo "See  ./configure --help  for more details."
+      echo "See  ./configure -h  for more details."
       echo ""
 fi
 
