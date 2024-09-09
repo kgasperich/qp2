@@ -587,6 +587,7 @@ def u64_array_to_int(a):
     return np.array([[ int.from_bytes(sdet.tobytes(),byteorder='little') for sdet in det] for det in a],dtype=object)
 
 
+
 class PsiDet:
     def __init__(self,inp,norb=None):
         self.psidet_u64 = inp
@@ -596,6 +597,7 @@ class PsiDet:
             self.norb = norb
         else:
             self.norb = np.argwhere(self.to_bits().reshape(-1,self.n64*64).sum(axis=0)>0).max()+1
+        self._bilinear_done = False
 
     @staticmethod
     def get_hp_ab_bits(d0,d1):
@@ -660,6 +662,8 @@ class PsiDet:
         return [''.join([OCC2CHAR[da_i,db_i] for da_i,db_i in zip(*det)]) for det in self.to_bits()]
     
     def make_bilinear(self):
+        if self._bilinear_done:
+            return
         self.ndet = len(self.psidet_u64)
         self.sorted_a_unique = self.unique_alpha()
         self.sorted_b_unique = self.unique_beta()
@@ -763,7 +767,40 @@ class PsiDet:
                 self.bilinear_transp_rows_loc[l] = k
 
         self.bilinear_transp_rows_loc[self.n_alpha_unique] = self.ndet
+        self._bilinear_done = True
         
+
+class MO_Basis:
+    def __init__(self, mo_coef, mo_sym=None, ao_md5=None):
+        """
+        initialize from mo coef array (dims [ao_num, mo_num])
+        """
+        self.mo_coef = np.array(mo_coef)
+        self.ao_num, self.mo_num = np.array(mo_coef).shape
+        self.mo_sym = np.array(mo_sym)
+        self.ao_md5 = ao_md5
+
+    @classmethod
+    def from_ezfiopath(cls, ezpath):
+        """
+        initialize from ezfio path
+        """
+        ezf = ezfio_obj()
+        ezf.set_file(ezpath)
+        #TODO: does this need to be transposed? (row/col major)
+        mo_coef = ezf.get_mo_basis_mo_coef()
+        mo_sym = ezf.get_mo_basis_mo_symmetry()
+        ao_md5 = ezf.get_ao_basis_ao_md5()
+        mobas = cls(mo_coef, mo_sym, ao_md5)
+        return mobas
+
+
+class Psi:
+    def __init__(self, psi_det, psi_coef, mo_basis=None, ao_basis=None):
+        self.ao_basis = ao_basis
+        self.mo_basis = mo_basis
+        self.psi_coef = psi_coef
+        self.psi_det = psi_det
 
 def long_int_to_uint64(i):
     res = []
@@ -838,12 +875,19 @@ def qp2_det_to_pyint(detab):
     return det_to_pyint(qp2_det_to_uint64(detab))
 
 
-
 def get_n64_from_norb(norb):
     return ((norb-1)//64)+1
 
 
+def get_ao_md5(ezpath):
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+    return ezf.get_ao_basis_ao_md5()
+
 def get_psi(ezpath):
+    """
+    read psi coef and det from ezfio
+    """
     ezf = ezfio_obj()
     ezf.set_file(ezpath)
 
@@ -852,7 +896,7 @@ def get_psi(ezpath):
     norb = ezf.get_mo_basis_mo_num()
     d1 = PsiDet(d0,norb=norb)
 
-    return c0,d1
+    return np.array(c0),d1
 
 def get_psi_saved_all(ezpath):
     ezf = ezfio_obj()
@@ -1206,6 +1250,118 @@ def make_tdm_sorted_bits_diag(psi1,psi2):
                     tdm1[1,hidx,pidx] += phase * c1[0][pd1.bilinear_transp_order[itot1]] * c2[0][pd2.bilinear_transp_order[itot2]]
                     
     return tdm1
+
+
+def get_md_overlap(psi1,psi2,s12,s1_tol=1E-13):
+
+    # coefs, dets
+    c1,pd1 = psi1
+    c2,pd2 = psi2
+
+    nstates1, _ = c1.shape
+    nstates2, _ = c2.shape
+
+    print(f'psi1 (states, ndet) = {c1.shape}')
+    print(f'psi2 (states, ndet) = {c2.shape}')
+
+    norb_1, norb_2 = s12.shape
+
+    assert(pd1.norb == norb_1)
+    assert(pd2.norb == norb_2)
+    
+    pd1.make_bilinear()
+    pd2.make_bilinear()
+
+    d1 = pd1.to_bits()
+    d2 = pd2.to_bits()
+
+    nd1, nspin,  nbit  = d1.shape
+    nd2, nspin2, nbit2 = d2.shape
+    assert(nspin==nspin2)
+    #assert(nbit==nbit2)
+    assert(c1.shape[1] == nd1)
+    assert(c2.shape[1] == nd2)
+
+    # overlap of two dets
+    @functools.lru_cache(maxsize=None)
+    def ovlpspindet(orbidx1, orbidx2):
+        return np.linalg.det(s12[np.ix_(orbidx1,orbidx2)])
+
+    S_12 = np.zeros((nstates1,nstates2),dtype=np.result_type(c1,c2))
+
+    # beta1
+    for ib1,b1 in tqdm(enumerate(pd1.sorted_b_unique), total = pd1.n_beta_unique):
+        occb1 = pd1.bits_to_occ(b1)
+
+        itot1_0 = pd1.bilinear_cols_loc[ib1]
+        itot1_1 = pd1.bilinear_cols_loc[ib1+1]
+        # beta2
+        for ib2,b2 in tqdm(enumerate(pd2.sorted_b_unique), total = pd2.n_beta_unique):
+            occb2 = pd2.bits_to_occ(b2)
+
+            itot2_0 = pd2.bilinear_cols_loc[ib2]
+            itot2_1 = pd2.bilinear_cols_loc[ib2+1]
+
+            sb_12 = ovlpspindet(occb1,occb2)
+            if (np.abs(sb_12) < s1_tol):
+                continue
+
+            # alpha1
+            for itot1 in range(itot1_0,itot1_1):
+                a1 = pd1.sorted_a_unique_bits[pd1.bilinear_rows[itot1]]
+                occa1 = pd1.bits_to_occ(a1)
+
+                # alpha2
+                for itot2 in range(itot2_0,itot2_1):
+                    a2 = pd2.sorted_a_unique_bits[pd2.bilinear_rows[itot2]]
+                    occa2 = pd2.bits_to_occ(a2)
+
+                    sa_12 = ovlpspindet(occa1,occa2)
+                    if (np.abs(sa_12) < s1_tol):
+                        continue
+
+                    sab_12 = sb_12 * sa_12
+                    for istate1, istate2 in itertools.product(range(nstates1),range(nstates2)):
+                        S_12[istate1,istate2] += c1[istate1][pd1.bilinear_order[itot1]] * c2[istate2][pd2.bilinear_order[itot2]] * sab_12
+
+    return S_12
+
+def get_s12_common_AOs(c1,c2):
+    """
+    for two sets of orthonormal MOs in same AO basis, return U such that c2 == c1 @ U
+    this is equivalent to the overlap matrix between the two sets of MOs (with rows from 1, cols from 2)
+
+    assume:
+    c1.T @ S @ c1 = 1
+    c2.T @ S @ c2 = 1
+
+    return:
+    c1.T @ S @ c2
+
+    c2 = c1 @ U
+    (c1.T @ c1)^(-1) @ c1.T @ c2 = (c1.T @ c1)^(-1) @ c1.T @ c1 @ U = U
+    c1.T @ S @ c2 = (c1.T @ S @ c1) @ U = U
+    """
+    return np.linalg.inv(c1.conj().T @ c1) @ c1.conj().T @ c2
+
+def get_md_overlap_from_ezfio12(ezf1,ezf2):
+    c1, psi1 = get_psi(ezf1)
+    c2, psi2 = get_psi(ezf2)
+    mos1 = MO_Basis.from_ezfiopath(ezf1)
+    mos2 = MO_Basis.from_ezfiopath(ezf2)
+    aomd5_1 = mos1.ao_md5
+    aomd5_2 = mos2.ao_md5
+    if (aomd5_1 != aomd5_2) or (aomd5_1 is None):
+        raise ValueError(f'ao_md5 mismatch; must provide overlap between two basis sets (not yet implemented)')
+
+    cmo1 = mos1.mo_coef
+    cmo2 = mos2.mo_coef
+    s12_mo = get_s12_common_AOs(cmo1,cmo2)
+
+    S12_md = get_md_overlap((c1,psi1),(c2,psi2),s12_mo)
+    return S12_md
+
+
 
 
 def test_phase_single_wf(psi1):
