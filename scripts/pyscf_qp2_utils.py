@@ -13,6 +13,7 @@ from tqdm import tqdm
 import shutil
 import gzip
 import tarfile
+import time
 
 OCC2CHAR = {(0,0):'0',(1,0):'a',(0,1):'b',(1,1):'2'}
 
@@ -598,6 +599,7 @@ class PsiDet:
         else:
             self.norb = np.argwhere(self.to_bits().reshape(-1,self.n64*64).sum(axis=0)>0).max()+1
         self._bilinear_done = False
+        self._occ_bilinear_done = False
 
     @staticmethod
     def get_hp_ab_bits(d0,d1):
@@ -614,6 +616,10 @@ class PsiDet:
     @staticmethod
     def bits_to_occ(bdet):
         return [tuple(np.argwhere(sdet).ravel()) for sdet in bdet]
+    
+    @staticmethod
+    def bits_to_occ_single(sdet):
+        return tuple(np.argwhere(sdet).ravel())
 
     @staticmethod
     def u64_to_bits(u64det):
@@ -661,9 +667,33 @@ class PsiDet:
     def to_string(self):
         return [''.join([OCC2CHAR[da_i,db_i] for da_i,db_i in zip(*det)]) for det in self.to_bits()]
     
+    def make_occ_bilinear(self):
+        if self._occ_bilinear_done:
+            return
+        self.make_bilinear()
+        print(f'constructing occ psi bilinear')
+        t0_0 = time.time()
+        t0_1 = time.perf_counter()
+        t0_2 = time.process_time()
+        self.sorted_a_unique_occ = self.bits_to_occ(self.sorted_a_unique_bits)
+        self.sorted_b_unique_occ = self.bits_to_occ(self.sorted_b_unique_bits)
+        self._occ_bilinear_done = True
+        t1_0 = time.time()
+        t1_1 = time.perf_counter()
+        t1_2 = time.process_time()
+        print(f'psi occ bilinear done: {self.ndet} dets')
+        print(f'                      {(self.n_alpha_unique,self.n_beta_unique)} (alpha, beta) unique')
+        print(f'time.time():         {t1_0 - t0_0}')
+        print(f'time.perf_counter(): {t1_1 - t0_1}')
+        print(f'time.process_time(): {t1_2 - t0_2}')
+
     def make_bilinear(self):
         if self._bilinear_done:
             return
+        print(f'constructing psi bilinear')
+        t0_0 = time.time()
+        t0_1 = time.perf_counter()
+        t0_2 = time.process_time()
         self.ndet = len(self.psidet_u64)
         self.sorted_a_unique = self.unique_alpha()
         self.sorted_b_unique = self.unique_beta()
@@ -768,6 +798,14 @@ class PsiDet:
 
         self.bilinear_transp_rows_loc[self.n_alpha_unique] = self.ndet
         self._bilinear_done = True
+        t1_0 = time.time()
+        t1_1 = time.perf_counter()
+        t1_2 = time.process_time()
+        print(f'psi bilinear done: {self.ndet} dets')
+        print(f'                  {(self.n_alpha_unique,self.n_beta_unique)} (alpha, beta) unique')
+        print(f'time.time():         {t1_0 - t0_0}')
+        print(f'time.perf_counter(): {t1_1 - t0_1}')
+        print(f'time.process_time(): {t1_2 - t0_2}')
         
 
 class MO_Basis:
@@ -788,8 +826,17 @@ class MO_Basis:
         ezf = ezfio_obj()
         ezf.set_file(ezpath)
         #TODO: does this need to be transposed? (row/col major)
-        mo_coef = ezf.get_mo_basis_mo_coef()
-        mo_sym = ezf.get_mo_basis_mo_symmetry()
+        mo_coef = np.array(ezf.get_mo_basis_mo_coef()).T
+        nao, nmo =  mo_coef.shape
+        print(f'importing MOs from {ezpath}')
+        print(f'{(nao,nmo) = }')
+        try:
+            # pyscf symm labels start at 0; shift by 1 for QP2
+            mo_sym = ezf.get_mo_basis_mo_symmetry()
+        #except FileNotFoundError:
+        except IOError:
+            print(f"no symmetry in {ezpath}; setting all mo_symmetry labels to 1")
+            mo_sym = np.array([1]*nmo)
         ao_md5 = ezf.get_ao_basis_ao_md5()
         mobas = cls(mo_coef, mo_sym, ao_md5)
         return mobas
@@ -897,6 +944,29 @@ def get_psi(ezpath):
     d1 = PsiDet(d0,norb=norb)
 
     return np.array(c0),d1
+
+def get_psi_nmax(ezpath,nmax=0):
+    """
+    read psi coef and det from ezfio
+    """
+    if nmax==0:
+        return get_psi(ezpath)
+    ezf = ezfio_obj()
+    ezf.set_file(ezpath)
+
+    c0 = ezf.get_determinants_psi_coef()
+    d0 = ezf.get_determinants_psi_det()
+    norb = ezf.get_mo_basis_mo_num()
+
+    ndet0 = len(d0)
+    ndet = min(ndet0,nmax)
+    d1 = PsiDet(d0[:ndet],norb=norb)
+    c1a = np.array(c0)[:,:ndet]
+    c1norm = np.linalg.norm(c1a,axis=1)
+    c1 = np.diag(1.0/c1norm) @ c1a
+    print(f'norm wf {c1norm}')
+
+    return c1,d1
 
 def get_psi_saved_all(ezpath):
     ezf = ezfio_obj()
@@ -1266,6 +1336,9 @@ def get_md_overlap(psi1,psi2,s12,s1_tol=1E-13):
 
     norb_1, norb_2 = s12.shape
 
+    print(f'MO overlap shape: {s12.shape}')
+    print(f'norb1: {pd1.norb}')
+    print(f'norb2: {pd2.norb}')
     assert(pd1.norb == norb_1)
     assert(pd2.norb == norb_2)
     
@@ -1290,14 +1363,14 @@ def get_md_overlap(psi1,psi2,s12,s1_tol=1E-13):
     S_12 = np.zeros((nstates1,nstates2),dtype=np.result_type(c1,c2))
 
     # beta1
-    for ib1,b1 in tqdm(enumerate(pd1.sorted_b_unique), total = pd1.n_beta_unique):
-        occb1 = pd1.bits_to_occ(b1)
+    for ib1,b1 in tqdm(enumerate(pd1.sorted_b_unique_bits), total = pd1.n_beta_unique):
+        occb1 = pd1.bits_to_occ_single(b1)
 
         itot1_0 = pd1.bilinear_cols_loc[ib1]
         itot1_1 = pd1.bilinear_cols_loc[ib1+1]
         # beta2
-        for ib2,b2 in tqdm(enumerate(pd2.sorted_b_unique), total = pd2.n_beta_unique):
-            occb2 = pd2.bits_to_occ(b2)
+        for ib2,b2 in tqdm(enumerate(pd2.sorted_b_unique_bits), total = pd2.n_beta_unique):
+            occb2 = pd2.bits_to_occ_single(b2)
 
             itot2_0 = pd2.bilinear_cols_loc[ib2]
             itot2_1 = pd2.bilinear_cols_loc[ib2+1]
@@ -1309,12 +1382,83 @@ def get_md_overlap(psi1,psi2,s12,s1_tol=1E-13):
             # alpha1
             for itot1 in range(itot1_0,itot1_1):
                 a1 = pd1.sorted_a_unique_bits[pd1.bilinear_rows[itot1]]
-                occa1 = pd1.bits_to_occ(a1)
+                occa1 = pd1.bits_to_occ_single(a1)
 
                 # alpha2
                 for itot2 in range(itot2_0,itot2_1):
                     a2 = pd2.sorted_a_unique_bits[pd2.bilinear_rows[itot2]]
-                    occa2 = pd2.bits_to_occ(a2)
+                    occa2 = pd2.bits_to_occ_single(a2)
+
+                    sa_12 = ovlpspindet(occa1,occa2)
+                    if (np.abs(sa_12) < s1_tol):
+                        continue
+
+                    sab_12 = sb_12 * sa_12
+                    for istate1, istate2 in itertools.product(range(nstates1),range(nstates2)):
+                        S_12[istate1,istate2] += c1[istate1][pd1.bilinear_order[itot1]] * c2[istate2][pd2.bilinear_order[itot2]] * sab_12
+
+    return S_12
+
+def get_md_overlap_occ(psi1,psi2,s12,s1_tol=1E-13):
+
+    # coefs, dets
+    c1,pd1 = psi1
+    c2,pd2 = psi2
+
+    nstates1, _ = c1.shape
+    nstates2, _ = c2.shape
+
+    print(f'psi1 (states, ndet) = {c1.shape}')
+    print(f'psi2 (states, ndet) = {c2.shape}')
+
+    norb_1, norb_2 = s12.shape
+
+    print(f'MO overlap shape: {s12.shape}')
+    print(f'norb1: {pd1.norb}')
+    print(f'norb2: {pd2.norb}')
+    assert(pd1.norb == norb_1)
+    assert(pd2.norb == norb_2)
+    
+    pd1.make_occ_bilinear()
+    pd2.make_occ_bilinear()
+
+    d1 = pd1.to_bits()
+    d2 = pd2.to_bits()
+
+    nd1, nspin,  nbit  = d1.shape
+    nd2, nspin2, nbit2 = d2.shape
+    assert(nspin==nspin2)
+    #assert(nbit==nbit2)
+    assert(c1.shape[1] == nd1)
+    assert(c2.shape[1] == nd2)
+
+    # overlap of two dets
+    @functools.lru_cache(maxsize=None)
+    def ovlpspindet(orbidx1, orbidx2):
+        return np.linalg.det(s12[np.ix_(orbidx1,orbidx2)])
+
+    S_12 = np.zeros((nstates1,nstates2),dtype=np.result_type(c1,c2))
+
+    # beta1
+    for ib1,occb1 in tqdm(enumerate(pd1.sorted_b_unique_occ), total = pd1.n_beta_unique):
+        itot1_0 = pd1.bilinear_cols_loc[ib1]
+        itot1_1 = pd1.bilinear_cols_loc[ib1+1]
+        # beta2
+        for ib2,occb2 in tqdm(enumerate(pd2.sorted_b_unique_occ), total = pd2.n_beta_unique):
+            itot2_0 = pd2.bilinear_cols_loc[ib2]
+            itot2_1 = pd2.bilinear_cols_loc[ib2+1]
+
+            sb_12 = ovlpspindet(occb1,occb2)
+            if (np.abs(sb_12) < s1_tol):
+                continue
+
+            # alpha1
+            for itot1 in range(itot1_0,itot1_1):
+                occa1 = pd1.sorted_a_unique_occ[pd1.bilinear_rows[itot1]]
+
+                # alpha2
+                for itot2 in range(itot2_0,itot2_1):
+                    occa2 = pd2.sorted_a_unique_occ[pd2.bilinear_rows[itot2]]
 
                     sa_12 = ovlpspindet(occa1,occa2)
                     if (np.abs(sa_12) < s1_tol):
@@ -1344,9 +1488,9 @@ def get_s12_common_AOs(c1,c2):
     """
     return np.linalg.inv(c1.conj().T @ c1) @ c1.conj().T @ c2
 
-def get_md_overlap_from_ezfio12(ezf1,ezf2):
-    c1, psi1 = get_psi(ezf1)
-    c2, psi2 = get_psi(ezf2)
+def get_md_overlap_from_ezfio12(ezf1,ezf2,nmax=0,precompute_occ=False):
+    c1, psi1 = get_psi_nmax(ezf1,nmax=nmax)
+    c2, psi2 = get_psi_nmax(ezf2,nmax=nmax)
     mos1 = MO_Basis.from_ezfiopath(ezf1)
     mos2 = MO_Basis.from_ezfiopath(ezf2)
     aomd5_1 = mos1.ao_md5
@@ -1358,7 +1502,10 @@ def get_md_overlap_from_ezfio12(ezf1,ezf2):
     cmo2 = mos2.mo_coef
     s12_mo = get_s12_common_AOs(cmo1,cmo2)
 
-    S12_md = get_md_overlap((c1,psi1),(c2,psi2),s12_mo)
+    if precompute_occ:
+        S12_md = get_md_overlap_occ((c1,psi1),(c2,psi2),s12_mo)
+    else:
+        S12_md = get_md_overlap((c1,psi1),(c2,psi2),s12_mo)
     return S12_md
 
 
